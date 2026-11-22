@@ -1,5 +1,7 @@
 # KomaGlide
 
+**繁體中文** · [日本語](README.ja.md) · [English](README.en.md) · [简体中文](README.zh-Hans.md)
+
 在漫畫原站連續閱讀，自動把已載入的正文圖存到該站的 IndexedDB。iPhone 的 Gear 和桌面 Tampermonkey 使用同一份 [KomaGlide 使用者腳本][install]。閱讀器、書庫介面和網站辨識都已包在腳本裡。
 
 ## 安裝與自動更新
