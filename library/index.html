@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f7f6f2">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="data:,">
+  <title>離線書庫 · KomaGlide</title>
+  <link rel="stylesheet" href="./library.css">
+  <link rel="stylesheet" href="./reader-navigation.css">
+  <script type="module" src="./bridge.js"></script>
+  <script type="module" blocking="render" src="./app.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="topline">
+      <a class="brand" href="#shelf" aria-label="KomaGlide 離線書庫首頁">KomaGlide</a>
+      <div class="masthead-tools">
+        <span id="offline-state" role="status">準備離線書庫中</span>
+        <label class="theme-picker" for="library-theme">外觀
+          <select id="library-theme">
+            <option value="system">跟隨系統</option>
+            <option value="light">淺色</option>
+            <option value="dark">深色</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  </header>
+  <main>
+    <p id="notice" role="status" hidden></p>
+    <section id="shelf">
+      <div class="title-row">
+        <h1>離線書庫</h1>
+        <a class="nav-action" href="#storage">容量設定</a>
+      </div>
+      <div class="shelf-tools">
+        <nav aria-label="書庫篩選">
+          <a href="#shelf" id="all-tab">全部作品</a>
+          <a href="#favorites" id="star-tab">收藏</a>
+        </nav>
+        <span id="usage"></span>
+      </div>
+      <div id="books"></div>
+    </section>
+    <section id="storage" hidden>
+      <a class="back" href="#shelf">返回書庫</a>
+      <h1>容量設定</h1>
+      <p id="storage-summary"></p>
+      <form id="limit-form">
+        <label for="limit">書庫容量上限（MiB）</label>
+        <div class="field"><input type="number" id="limit" required min="1" step="1"><button class="primary" type="submit">儲存上限</button></div>
+      </form>
+      <p class="hint">收藏和一般快取共用容量。調低上限時，書庫會從最久沒讀、尚未收藏的一話開始，整話移除。</p>
+      <section class="storage-retention" aria-labelledby="retention-title">
+        <h2 id="retention-title">瀏覽器儲存保護</h2>
+        <p class="hint" id="retention" role="status"></p>
+        <p class="hint">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>
+        <button id="request-retention" type="button">申請持久儲存</button>
+        <p class="hint" id="retention-result" role="status"></p>
+      </section>
+    </section>
+    <section id="reader" hidden>
+      <a id="reader-return" class="back" href="#shelf">返回書庫</a>
+      <div id="chapter-head"></div>
+      <div id="reader-tools"></div>
+      <div id="pages"></div>
+      <nav id="reader-end" aria-label="話數導覽"></nav>
+    </section>
+    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>
+  </main>
+</body>
+</html>

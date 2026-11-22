@@ -1,0 +1,4 @@
+/dist/*
+!/dist/komaglide.user.js
+/node_modules/
+.DS_Store
