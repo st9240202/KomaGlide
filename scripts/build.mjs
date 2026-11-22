@@ -8,8 +8,9 @@ const siteFiles = (await readdir(new URL('src/sites/', root)))
   .filter(name => name.endsWith('.js') && name !== 'generic.js').sort();
 siteFiles.push('generic.js');
 
-const [metadata, template, detectors, store, events, view, controls, shell, libraryCss, navigationCss] = await Promise.all([
+const [metadata, template, detectors, i18n, store, events, view, controls, shell, libraryCss, navigationCss] = await Promise.all([
   read('src/userscript.meta'), read('src/userscript.js'), Promise.all(siteFiles.map(name => read('src/sites/' + name))),
+  read('library/i18n.js'),
   read('library/store.js'), read('src/shelf-events.js'), read('library/shelf.js'),
   read('library/reader-controls.js'), read('library/index.html'), read('library/library.css'),
   read('library/reader-navigation.css')
@@ -24,9 +25,11 @@ function inlineModule(source) {
 const shelfDocument = shell
   .replace(/^  <(?:link rel="stylesheet"|script type="module").*\n/gm, '')
   .replace('</head>', () => '<style>' + libraryCss + '\n' + navigationCss + '</style></head>')
+  .replaceAll('offlineLibrary', 'siteLibrary')
   .replaceAll('離線書庫', '本站書庫')
   .replace('準備本站書庫中', '');
 const parts = {
+  I18N: inlineModule(i18n),
   SITE_ADAPTERS: detectors.join('\n'),
   SITE_STORE: inlineModule(store),
   SHELF_EVENTS: events,

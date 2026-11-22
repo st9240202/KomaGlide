@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 // This module is also bundled into the userscript's isolated reader dialog.
 export function watchReaderTheme(paint, signal) {
   const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
@@ -42,24 +43,24 @@ const thumbnailPumps = new Set();
 function openThumbnailPicker(container, { total, current, direction, thumbnailSize, onThumbnailSize, getThumbnail, onPick, onClose }) {
   const dialog = document.createElement('dialog');
   dialog.className = 'kg-thumb-picker';
-  dialog.setAttribute('aria-label', '小圖選頁');
+  dialog.setAttribute('aria-label', t('thumbnails'));
   const header = document.createElement('div');
   header.className = 'kg-thumb-head';
   const heading = document.createElement('strong');
-  heading.textContent = '小圖選頁';
+  heading.textContent = t('thumbnails');
   const range = document.createElement('span');
   range.className = 'kg-thumb-range';
   const sizeLabel = document.createElement('label');
   sizeLabel.className = 'kg-thumb-size';
   const sizeMenu = document.createElement('select');
-  sizeMenu.setAttribute('aria-label', '縮圖大小');
-  for (const [value, text] of [['small', '小'], ['medium', '中'], ['large', '大']]) {
-    sizeMenu.add(new Option(text, value));
+  sizeMenu.setAttribute('aria-label', t('thumbnailSize'));
+  for (const value of ['small', 'medium', 'large']) {
+    sizeMenu.add(new Option(t(value), value));
   }
   sizeMenu.value = thumbnailSize;
-  sizeLabel.append('縮圖大小', sizeMenu);
-  const close = readerButton('關閉', dispose);
-  close.setAttribute('aria-label', '關閉小圖');
+  sizeLabel.append(t('thumbnailSize'), sizeMenu);
+  const close = readerButton(t('close'), dispose);
+  close.setAttribute('aria-label', t('closeThumbnails'));
   header.append(heading, range, sizeLabel, close);
   const grid = document.createElement('div');
   grid.className = 'kg-thumb-grid';
@@ -69,8 +70,8 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
   footer.className = 'kg-thumb-footer';
   const batch = 60;
   let start = current - ((current - 1) % batch);
-  const back = readerButton('上一組', () => show(start - batch, start - 1));
-  const more = readerButton('下一組', () => show(start + batch, start + batch));
+  const back = readerButton(t('previousBatch'), () => show(start - batch, start - 1));
+  const more = readerButton(t('nextBatch'), () => show(start + batch, start + batch));
   footer.append(back, more);
   footer.hidden = total <= batch;
   dialog.append(header, grid, footer);
@@ -124,7 +125,7 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
       const blob = await getThumbnail(Number(tile.dataset.page), large ? 'large' : 'medium');
       if (!entry.visible) return;
       if (!blob) {
-        if (!entry.url) frame.textContent = '無預覽';
+        if (!entry.url) frame.textContent = t('noPreview');
         return;
       }
       const img = document.createElement('img');
@@ -140,7 +141,7 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
       entry.large = large;
       url = null;
     } catch {
-      if (entry.visible && !entry.url) frame.textContent = '無預覽';
+      if (entry.visible && !entry.url) frame.textContent = t('noPreview');
     } finally {
       if (url) URL.revokeObjectURL(url);
     }
@@ -188,7 +189,9 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
     clearGrid();
     start = first;
     const last = Math.min(total, start + batch - 1);
-    range.textContent = total <= batch ? total + ' 頁' : start + '–' + last + ' / ' + total + ' 頁';
+    range.textContent = total <= batch
+      ? t(total === 1 ? 'pageCountOne' : 'pageCount', {count: total})
+      : t('pageRange', {start, end: last, total});
     back.disabled = start === 1;
     more.disabled = last === total;
     for (let page = start; page <= last; page++) {
@@ -196,7 +199,7 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
       tile.type = 'button';
       tile.className = 'kg-thumb-page';
       tile.dataset.page = page;
-      tile.setAttribute('aria-label', '第 ' + page + ' 頁');
+      tile.setAttribute('aria-label', t('pageNumber', {page}));
       if (page === current) tile.setAttribute('aria-current', 'page');
       const frame = document.createElement('span');
       frame.className = 'kg-thumb-frame';
@@ -343,8 +346,8 @@ export function mountReaderControls(container, options) {
     panel.append(extras);
   }
 
-  const settings = drawer('left', '閱讀設定', '設定');
-  const navigation = drawer('right', '頁面導覽', '導覽');
+  const settings = drawer('left', t('readerSettings'), t('settings'));
+  const navigation = drawer('right', t('pageNavigation'), t('navigation'));
 
   function menu(name, choices, change) {
     const label = document.createElement('label');
@@ -357,24 +360,24 @@ export function mountReaderControls(container, options) {
     return select;
   }
 
-  const mode = menu('閱讀模式', [['scroll', '直向捲動'], ['single', '單頁'], ['double', '雙頁']], onMode);
+  const mode = menu(t('readingMode'), [['scroll', t('verticalScroll')], ['single', t('singlePage')], ['double', t('doublePage')]], onMode);
   if (options.onBufferMode) {
-    const buffer = menu('緩衝模式', [['chapter', '停留時緩衝整話'], ['ahead', '只預載後面 3 頁']], options.onBufferMode);
+    const buffer = menu(t('bufferMode'), [['chapter', t('bufferChapter')], ['ahead', t('bufferAhead')]], options.onBufferMode);
     buffer.value = options.bufferMode;
   }
   if (options.parallelPreload) {
     const {value, choices, onChange} = options.parallelPreload;
-    const preload = menu('並行預載數', choices.map(count => [count, count + ' 頁']), onChange);
+    const preload = menu(t('parallelPreload'), choices.map(count => [count, t(count === 1 ? 'pageCountOne' : 'pageCount', {count})]), onChange);
     preload.value = String(value);
   }
-  const theme = menu('外觀', [['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']], onTheme);
-  const direction = menu('翻頁方向', [['rtl', '從右到左'], ['ltr', '從左到右']], options.onDirection);
+  const theme = menu(t('appearance'), [['system', t('systemTheme')], ['light', t('lightTheme')], ['dark', t('darkTheme')]], onTheme);
+  const direction = menu(t('pageDirection'), [['rtl', t('rtl')], ['ltr', t('ltr')]], options.onDirection);
   const tapLabel = document.createElement('label');
   const tap = document.createElement('input');
   tap.type = 'checkbox';
   tap.addEventListener('change', () => options.onTapToTurn(tap.checked), listen);
-  tapLabel.append(tap, '點按翻頁');
-  const browse = readerButton('小圖選頁', () => {
+  tapLabel.append(tap, t('tapToTurn'));
+  const browse = readerButton(t('thumbnails'), () => {
     if (picker || state.total < 1) return;
     const current = Math.max(1, Math.min(options.getCurrentPage(), state.total));
     picker = openThumbnailPicker(toolbar, { ...state, current, getThumbnail: options.getThumbnail,
@@ -399,8 +402,8 @@ export function mountReaderControls(container, options) {
     const target = options.getCurrentPage() + step;
     if (target >= 1 && target <= state.total) options.onPick(target);
   }, listen);
-  const previous = readerButton('上一頁', () => turn(-1));
-  const next = readerButton('下一頁', () => turn(1));
+  const previous = readerButton(t('previousPage'), () => turn(-1));
+  const next = readerButton(t('nextPage'), () => turn(1));
   const count = document.createElement('span');
   count.className = 'kg-page-count';
   count.setAttribute('aria-live', 'polite');
@@ -452,7 +455,7 @@ export function mountReaderControls(container, options) {
     direction.value = state.direction;
     tap.checked = state.tapToTurn;
     const rtl = state.direction === 'rtl';
-    tapLabel.title = rtl ? '點畫面左側前進，右側返回' : '點畫面右側前進，左側返回';
+    tapLabel.title = rtl ? t('tapRtl') : t('tapLtr');
     previous.setAttribute('aria-keyshortcuts', rtl ? 'ArrowRight PageUp' : 'ArrowLeft PageUp');
     next.setAttribute('aria-keyshortcuts', rtl ? 'ArrowLeft PageDown' : 'ArrowRight PageDown');
     setTheme?.(state.theme);

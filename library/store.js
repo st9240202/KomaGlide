@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 const DB_NAME = 'komaglide-library-v1';
 const MiB = 1024 ** 2;
 export const DEFAULT_LIMIT = 1024 * MiB;
@@ -42,7 +43,7 @@ async function transaction(names, mode, run) {
     let result;
     let failure;
     tx.oncomplete = () => resolve(result);
-    tx.onabort = () => reject(failure || tx.error || new Error('書庫寫入已中斷，請重試。'));
+    tx.onabort = () => reject(failure || tx.error || new Error(t('writeAborted')));
     Promise.resolve().then(() => run(tables)).then(value => {
       result = value;
     }, error => {
@@ -65,7 +66,7 @@ function identity(page) {
   if (!page || typeof page.site !== 'string' || !page.site || typeof page.chapterId !== 'string' || !page.chapterId ||
       (page.workId != null && typeof page.workId !== 'string') ||
       !Number.isSafeInteger(page.index) || page.index < 1) {
-    throw new Error('頁面識別資料不完整，無法存取漫畫頁。');
+    throw new Error(t('incompletePage'));
   }
   return [page.site, page.workId || '', page.chapterId];
 }
@@ -89,7 +90,7 @@ async function makeRoom(tables, state, required, skipKey) {
   let bytes = 0;
   let count = 0;
   while (count < candidates.length && bytes < required) bytes += candidates[count++].bytes;
-  if (bytes < required) throw new Error('容量不足。請調高書庫上限或解除收藏，再重新儲存。');
+  if (bytes < required) throw new Error(t('insufficientStorage'));
   for (const { key } of candidates.slice(0, count)) {
     tables.chapters.delete(key);
     tables.pages.delete(indices(key));
@@ -103,7 +104,7 @@ function title(value, fallback) {
 
 export async function putPage(page, blob) {
   const key = identity(page);
-  if (!(blob instanceof Blob) || !blob.size) throw new Error('圖片沒有內容，請重新載入這一頁。');
+  if (!(blob instanceof Blob) || !blob.size) throw new Error(t('emptyImage'));
   let blobRejected = false;
   function save(image) {
     return transaction(stores, 'readwrite', async tables => {
@@ -114,7 +115,7 @@ export async function putPage(page, blob) {
       const chapter = previous || { key, favorite: false, count: 0, bytes: 0, total: null };
       if (!present) {
         if (blob.size + chapter.bytes > state.limit) {
-          throw new Error('這一話的圖片超過書庫上限。請調高上限後重試。');
+          throw new Error(t('chapterTooLarge'));
         }
         await makeRoom(tables, state, state.used + blob.size - state.limit, key);
         try {
@@ -228,7 +229,7 @@ export async function readerBlob(key, index) {
 }
 
 export async function setLimit(bytes) {
-  if (!Number.isSafeInteger(bytes) || bytes < 1) throw new Error('請輸入有效的容量上限。');
+  if (!Number.isSafeInteger(bytes) || bytes < 1) throw new Error(t('invalidLimit'));
   return transaction(stores, 'readwrite', async tables => {
     const state = await readState(tables.settings);
     await makeRoom(tables, state, state.used - bytes);
@@ -240,13 +241,13 @@ export async function setLimit(bytes) {
 export async function setFavorite(key, enabled) {
   return transaction(['chapters', 'favoriteWorks'], 'readwrite', async tables => {
     if (key.length === 2) {
-      if (!key[1]) throw new Error('尚未確認這一話所屬的作品。');
+      if (!key[1]) throw new Error(t('noWork'));
       if (enabled) tables.favoriteWorks.put(true, key);
       else tables.favoriteWorks.delete(key);
       return;
     }
     const chapter = await request(tables.chapters.get(key));
-    if (!chapter) throw new Error('書庫已移除這一話，請重新開啟書架。');
+    if (!chapter) throw new Error(t('chapterRemoved'));
     chapter.favorite = enabled;
     tables.chapters.put(chapter, key);
   });

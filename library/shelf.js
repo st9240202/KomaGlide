@@ -1,12 +1,32 @@
+import { locale, localeNames, localizeDocument, t } from './i18n.js';
 import { shelf, readChapter, readerBlob, setFavorite, setLimit } from './store.js';
 import { makeReaderThumbnail, mountReaderControls, watchReaderTheme } from './reader-controls.js';
 
-export function mountShelf(routePrefix, { announce, changes, messageFor }) {
+export function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }) {
+  localizeDocument();
   const $ = id => document.getElementById(id);
+  const languagePicker = $('library-language');
+  for (const [value, label] of Object.entries(localeNames)) {
+    const option = new Option(label, value);
+    option.lang = value;
+    languagePicker.add(option);
+  }
+  languagePicker.value = locale;
+  languagePicker.addEventListener('change', async () => {
+    languagePicker.disabled = true;
+    try {
+      await saveLanguage(languagePicker.value);
+      location.reload();
+    } catch {
+      languagePicker.value = locale;
+      languagePicker.disabled = false;
+      notify(t('languageSaveFailed'));
+    }
+  });
   for (const link of document.querySelectorAll('a[href^="#"]')) {
     link.hash = routePrefix + link.hash.slice(1);
   }
-  const collator = new Intl.Collator('zh-Hant', { numeric: true });
+  const collator = new Intl.Collator(locale, { numeric: true });
   let version = 0;
   let refreshTimer;
   let disposePages = () => {};
@@ -84,28 +104,26 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
     }
   }
 
-  function storageProtectionMessage({state}, action) {
-    if (state === 'granted') return '瀏覽器已授予持久儲存。';
-    if (state === 'not-granted') return action === '查詢'
-      ? '本站目前尚未獲得持久儲存保護。'
-      : '瀏覽器未核准這次持久儲存申請。';
-    if (state === 'unsupported') return '目前的瀏覽器環境未提供持久儲存' + action + '功能。';
-    return '瀏覽器' + action + '持久儲存時發生錯誤。';
+  function storageProtectionMessage({state}, isRequest) {
+    if (state === 'granted') return t('persistenceGranted');
+    if (state === 'not-granted') return t(isRequest ? 'persistenceDenied' : 'persistenceNotGranted');
+    if (state === 'unsupported') return t(isRequest ? 'persistenceRequestUnsupported' : 'persistenceCheckUnsupported');
+    return t(isRequest ? 'persistenceRequestFailed' : 'persistenceCheckFailed');
   }
 
-  function showStorageDiagnostic(element, result, action, api) {
-    element.textContent = storageProtectionMessage(result, action);
+  function showStorageDiagnostic(element, result, isRequest, api) {
+    element.textContent = storageProtectionMessage(result, isRequest);
     if (result.state === 'granted') return;
-    const detail = result.state === 'not-granted' ? api + ' 回傳 false' : [api, result.detail].filter(Boolean).join(' · ');
+    const detail = result.state === 'not-granted' ? t('returnedFalse', {api}) : [api, result.detail].filter(Boolean).join(' · ');
     element.append(el('span', detail, 'notice-detail'));
   }
 
   async function checkStorageProtection() {
     const check = ++retentionCheck;
     const status = $('retention');
-    status.textContent = '正在查詢本站的持久儲存狀態。';
+    status.textContent = t('checkingPersistence');
     const result = await readStorageProtection('persisted');
-    if (check === retentionCheck) showStorageDiagnostic(status, result, '查詢', 'navigator.storage.persisted()');
+    if (check === retentionCheck) showStorageDiagnostic(status, result, false, 'navigator.storage.persisted()');
   }
 
   function requestStorageProtection() {
@@ -115,10 +133,10 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
     const button = $('request-retention');
     const status = $('retention-result');
     button.disabled = true;
-    status.textContent = '正在向瀏覽器申請持久儲存。';
+    status.textContent = t('requestingPersistence');
     void pending.then(result => {
       pendingRetentionRequest = null;
-      showStorageDiagnostic(status, result, '申請', 'navigator.storage.persist()');
+      showStorageDiagnostic(status, result, true, 'navigator.storage.persist()');
       button.disabled = false;
       if (!$('storage').hidden) void checkStorageProtection();
     });
@@ -126,8 +144,8 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
   }
 
   function size(bytes) {
-    if (bytes >= 1024 * MiB) return (bytes / (1024 * MiB)).toLocaleString('zh-Hant', { maximumFractionDigits: 2 }) + ' GiB';
-    if (bytes >= MiB) return (bytes / MiB).toLocaleString('zh-Hant', { maximumFractionDigits: 1 }) + ' MiB';
+    if (bytes >= 1024 * MiB) return (bytes / (1024 * MiB)).toLocaleString(locale, { maximumFractionDigits: 2 }) + ' GiB';
+    if (bytes >= MiB) return (bytes / MiB).toLocaleString(locale, { maximumFractionDigits: 1 }) + ' MiB';
     if (bytes >= 1024) return Math.ceil(bytes / 1024) + ' KiB';
     return bytes + ' B';
   }
@@ -172,11 +190,13 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
   }
 
   function countText(chapter) {
-    return chapter.total ? '已存 ' + chapter.count + ' / ' + chapter.total + ' 頁' : '已存 ' + chapter.count + ' 頁 · 總頁數未知';
+    return t(chapter.total ? 'savedKnownTotal' : 'savedUnknownTotal', {count: chapter.count, total: chapter.total});
   }
 
-  function favoriteButton(key, enabled, name) {
-    const label = (enabled ? '已收藏' : '收藏') + name;
+  function favoriteButton(key, enabled) {
+    const label = key.length === 3
+      ? t(enabled ? 'favoritedChapter' : 'favoriteChapter')
+      : t(enabled ? 'favoritedWork' : 'favoriteWork');
     const button = el('button', label, 'favorite');
     button.type = 'button';
     button.id = 'kg-favorite-' + key.map(encodeURIComponent).join('/');
@@ -202,15 +222,15 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
         await setFavorite(key, !enabled);
         announce({ kind: 'favorite' });
         if (location.hash !== route) return;
-        const notice = notify(enabled ? '已取消收藏。' : '已收藏。', 'success');
+        const notice = notify(enabled ? t('removedFavorite') : t('addedFavorite'), 'success');
         if (retention) {
           const detail = el('span', '', 'notice-detail');
           notice.append(detail);
           void retention.then(result => {
             if (result.state === 'granted') return;
-            const link = el('a', '查看儲存診斷');
+            const link = el('a', t('storageDiagnostics'));
             link.href = routePrefix + 'storage';
-            detail.append(storageProtectionMessage(result, '申請'), ' ', link);
+            detail.append(storageProtectionMessage(result, true), ' ', link);
           });
         }
       } catch (error) {
@@ -241,15 +261,16 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
       const article = el('article', null, 'work');
       const head = el('div', null, 'work-head');
       const names = el('div');
-      names.append(el('h2', recent.workKnown ? recent.workTitle : '尚未歸入作品'),
-        el('span', recent.key[0] + ' · ' + group.chapters.length + ' 話', 'source'));
+      const count = group.chapters.length;
+      names.append(el('h2', recent.workKnown ? recent.workTitle : t('ungrouped')),
+        el('span', recent.key[0] + ' · ' + t(count === 1 ? 'chapterCountOne' : 'chapterCount', {count}), 'source'));
       head.append(names);
-      if (recent.workKnown) head.append(favoriteButton(workKey, workStar, '作品'));
+      if (recent.workKnown) head.append(favoriteButton(workKey, workStar));
       article.append(head);
       for (const chapter of group.chapters.sort(chaptersInOrder)) {
         const row = el('div', null, 'chapter-row');
         const link = shelfChapterLink(chapter);
-        const bookmark = favoriteButton(chapter.key, chapter.favorite, '單話');
+        const bookmark = favoriteButton(chapter.key, chapter.favorite);
         link.id = 'title-' + bookmark.id;
         bookmark.setAttribute('aria-describedby', link.id);
         row.append(link, el('span', countText(chapter), 'count'), bookmark);
@@ -259,9 +280,9 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
     }
     if (!groups.size) {
       const empty = el('div', null, 'empty');
-      empty.append(el('h2', starred ? '還沒有收藏' : '書架上還沒有漫畫'),
-        el('p', starred ? '在全部作品中收藏作品或單話，即可在這裡找到。' :
-          '安裝 KomaGlide 腳本後，到支援的漫畫頁閱讀。已儲存的頁面會自動出現在這裡。'));
+      empty.append(el('h2', starred ? t('noFavorites') : t('noComics')),
+        el('p', starred ? t('favoritesHint') :
+          t('emptyShelfHint')));
       frag.append(empty);
     }
     const books = $('books');
@@ -296,17 +317,17 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
         const index = Number(slot.dataset.index);
         const blob = await readerBlob(key, index);
         if (pending.get(slot) !== token) return;
-        if (!blob) throw new Error('此頁已從書庫移除。');
+        if (!blob) throw new Error(t('pageRemoved'));
         const img = el('img');
         const url = URL.createObjectURL(blob);
         urls.set(slot, url);
         img.dataset.index = String(index);
-        img.alt = '第 ' + index + ' 頁';
+        img.alt = t('pageNumber', {page: index});
         img.onload = () => {
           if (img.naturalWidth && img.naturalHeight) slot.style.aspectRatio = img.naturalWidth + ' / ' + img.naturalHeight;
         };
         img.onerror = () => {
-          if (pending.get(slot) === token) slot.replaceChildren(el('p', '第 ' + index + ' 頁的圖片無法解碼。', 'gap'));
+          if (pending.get(slot) === token) slot.replaceChildren(el('p', t('decodeFailed', {page: index}), 'gap'));
         };
         img.src = url;
         slot.replaceChildren(img);
@@ -323,7 +344,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
     function gap(first, last) {
       if (first > last) return;
       const range = first === last ? String(first) : first + '–' + last;
-      const missing = el('p', '第 ' + range + ' 頁尚未儲存', 'gap');
+      const missing = el('p', t('missingPages', {range}), 'gap');
       missing.dataset.first = first;
       missing.dataset.last = last;
       list.append(missing);
@@ -333,7 +354,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
       figure.dataset.first = index;
       const slot = el('div', null, 'page-slot');
       slot.dataset.index = String(index);
-      figure.append(el('figcaption', '第 ' + index + ' 頁'), slot);
+      figure.append(el('figcaption', t('pageNumber', {page: index})), slot);
       list.append(figure);
       observer.observe(slot);
     }
@@ -431,8 +452,8 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
       c.key[0] === chapter.key[0] && c.key[1] === chapter.key[1]).sort(chaptersInOrder);
     const i = related.findIndex(c => c.key[2] === chapter.key[2]);
     const links = [];
-    if (i > 0) links.push(chapterLink(related[i - 1], '上一話 · ' + related[i - 1].chapterTitle));
-    if (i >= 0 && related[i + 1]) links.push(chapterLink(related[i + 1], '下一話 · ' + related[i + 1].chapterTitle));
+    if (i > 0) links.push(chapterLink(related[i - 1], t('previousChapter') + ' · ' + related[i - 1].chapterTitle));
+    if (i >= 0 && related[i + 1]) links.push(chapterLink(related[i + 1], t('nextChapter') + ' · ' + related[i + 1].chapterTitle));
     return links;
   }
 
@@ -453,16 +474,16 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
     $('storage').hidden = !storage;
     themePicker.parentElement.hidden = reading;
     if (reading && reset) {
-      $('chapter-head').replaceChildren(el('h1', '載入這一話中'));
+      $('chapter-head').replaceChildren(el('h1', t('loadingChapter')));
       $('reader-end').replaceChildren();
     }
     try {
       if (reading) {
         const key = hash.slice(5).split('/').map(decodeURIComponent);
-        if (key.length !== 3) throw new Error('這個閱讀網址不完整，請返回書庫重新選話。');
+        if (key.length !== 3) throw new Error(t('invalidChapterUrl'));
         const result = await readChapter(key);
         if (version !== token) return;
-        if (!result) throw new Error('書庫裡找不到這一話，請返回書庫選擇其他話。');
+        if (!result) throw new Error(t('chapterNotFound'));
         const { chapter, indices } = result;
         const data = await shelf();
         if (version !== token) return;
@@ -482,9 +503,9 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
       const data = await shelf();
       if (version !== token) return;
       const { used, limit } = data.state;
-      document.title = (storage ? '容量設定' : '書庫') + ' · KomaGlide';
+      document.title = (storage ? t('storageSettings') : t('library')) + ' · KomaGlide';
       if (storage) {
-        $('storage-summary').textContent = '已使用 ' + size(used) + '，目前上限 ' + size(limit) + '。';
+        $('storage-summary').textContent = t('storageUsage', {used: size(used), limit: size(limit)});
         if (reset) $('limit').value = String(limit / MiB);
         if (reset) void checkStorageProtection();
       } else {
@@ -500,7 +521,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
         if (reading) {
           disposePages();
           activeKey = undefined;
-          $('chapter-head').replaceChildren(el('h1', '無法開啟這一話'));
+          $('chapter-head').replaceChildren(el('h1', t('chapterOpenFailed')));
           $('reader-end').replaceChildren();
         }
         notify(messageFor(error));
@@ -516,7 +537,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
     try {
       await setLimit(Number($('limit').value) * MiB);
       announce({ kind: 'limit' });
-      notify('已更新書庫容量上限。');
+      notify(t('storageLimitSaved'));
     } catch (error) {
       notify(messageFor(error));
     } finally {
@@ -533,8 +554,8 @@ export function mountShelf(routePrefix, { announce, changes, messageFor }) {
       // Avoid losing the reading position when background transfers arrive.
       if (activeKey && detail.kind === 'saved' && activeKey[0] === detail.site &&
           activeKey[1] === detail.workId && activeKey[2] === detail.chapterId) {
-        notify('這一話有新儲存的頁面。');
-        const refresh = el('button', '更新頁面');
+        notify(t('newPagesSaved'));
+        const refresh = el('button', t('refreshPages'));
         refresh.onclick = () => { notify(); render(); };
         $('notice').append(' ', refresh);
       }

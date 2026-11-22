@@ -19,6 +19,7 @@
     }
   }
 
+  /* INSERT_I18N */
   /* INSERT_SITE_STORE */
   /* INSERT_SHELF_EVENTS */
   /* INSERT_SHELF_VIEW */
@@ -62,8 +63,11 @@
     const root = document.importNode(shell.documentElement, true);
     if (document.documentElement) document.documentElement.replaceWith(root);
     else document.appendChild(root);
+    mountShelf(SHELF_HASH, {
+      ...getShelfEvents(),
+      saveLanguage: value => write(languageKey, value),
+    });
     document.getElementById('offline-state').textContent = location.host;
-    mountShelf(SHELF_HASH, getShelfEvents());
   }
 
   const notContent = 'nav,aside,footer,header,[role="navigation"],[role="banner"],[aria-hidden="true"],[hidden],.advertisement,.ads,.promo,.navigation';
@@ -121,7 +125,7 @@
   }
   function checkedMime(value) {
     const mime = (value || '').split(';')[0].trim().toLowerCase();
-    if (!MIME.test(mime)) throw new Error('圖檔格式不支援');
+    if (!MIME.test(mime)) throw new Error(t('unsupportedImage'));
     return mime;
   }
 
@@ -138,7 +142,7 @@
 
   function fetchPublicImage(url, readerOrigin) {
     return new Promise((resolve, reject) => {
-      const fail = () => reject(new Error('無法讀取漫畫圖檔'));
+      const fail = () => reject(new Error(t('imageReadFailed')));
       const xhr = GM_xmlhttpRequest({url: url.href, method: 'GET', responseType: 'blob',
         anonymous: true, timeout: 30_000, redirect: 'error',
         ...(readerOrigin ? {headers: {Referer: readerOrigin + '/'}} : {}),
@@ -146,9 +150,9 @@
         onload(response) {
           try {
             const blob = response.response;
-            if (response.status !== 200) return reject(new Error('圖站回應 HTTP ' + response.status));
+            if (response.status !== 200) return reject(new Error(t('imageHttpStatus', {status: response.status})));
             if (readerOrigin && /^cache-control:[^\r\n]*\bno-store\b/im.test(response.responseHeaders || '')) {
-              return reject(new Error('此圖片限線上閱讀'));
+              return reject(new Error(t('onlineOnly')));
             }
             if (!blob || !blob.size || blob.size > IMAGE_LIMIT) return fail();
             const mime = checkedMime(blob.type);
@@ -181,7 +185,7 @@
       }
       throw error;
     }
-    if (!response.ok) throw new Error('讀取圖檔失敗（HTTP ' + response.status + '）');
+    if (!response.ok) throw new Error(t('imageHttpFailed', {status: response.status}));
     const mime = checkedMime(response.headers.get('content-type'));
     const stream = response.body.getReader();
     const parts = [];
@@ -191,11 +195,11 @@
         const {done, value} = await stream.read();
         if (done) break;
         size += value.length;
-        if (size > IMAGE_LIMIT) { await stream.cancel(); throw new Error('單頁超過 32 MiB'); }
+        if (size > IMAGE_LIMIT) { await stream.cancel(); throw new Error(t('imageTooLarge')); }
         parts.push(value);
       }
     } finally { stream.releaseLock(); }
-    if (!size) throw new Error('圖檔為空');
+    if (!size) throw new Error(t('blankImage'));
     return new Blob(parts, {type: mime});
   }
 
@@ -320,6 +324,7 @@
     /* INSERT_READER_NAV_CSS */
   `;
   function readerRoot(host) {
+    host.lang = locale;
     const root = host.attachShadow({mode: 'open'});
     root.append(element('style', readerCSS));
     return root;
@@ -329,7 +334,7 @@
     const timeout = AbortSignal.timeout(20_000);
     const response = await fetch(address, {mode:'same-origin', credentials:'same-origin',
       signal:signal ? AbortSignal.any([signal, timeout]) : timeout});
-    if (!response.ok || !/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error('下一頁沒有傳回章節網頁');
+    if (!response.ok || !/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error(t('nextPageNotHtml'));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let html = '', size = 0;
@@ -338,7 +343,7 @@
         const {done, value} = await reader.read();
         if (done) break;
         size += value.length;
-        if (size > 4 * 1024 * 1024) { await reader.cancel(); throw new Error('章節網頁過大'); }
+        if (size > 4 * 1024 * 1024) { await reader.cancel(); throw new Error(t('chapterHtmlTooLarge')); }
         html += decoder.decode(value, {stream:true});
       }
       html += decoder.decode();
@@ -353,7 +358,7 @@
   async function fetchChapter(address) {
     const parsed = await fetchDocument(address);
     const chapter = detectChapter(parsed.root, parsed.address);
-    if (!chapter) throw new Error('無法辨識接續章節');
+    if (!chapter) throw new Error(t('nextChapterUnrecognized'));
     return chapter;
   }
 
@@ -375,7 +380,7 @@
       applyAuto(enabled);
     });
     settingsChanged.addEventListener('change', () => { input.checked = autoNext; }, {signal});
-    label.append(input, document.createTextNode('自動接下一話'));
+    label.append(input, document.createTextNode(t('autoContinue')));
     return label;
   }
 
@@ -442,7 +447,7 @@
     }, options);
     function showPageRetry(figure, message) {
       const caption = element('figcaption', message + ' ');
-      caption.append(button('重試', () => {
+      caption.append(button(t('retry'), () => {
         releaseFigure(figure);
         loadFigure(figure);
       }));
@@ -480,13 +485,13 @@
       const page = entries.get(figure);
       const source = liveChapter;
       if (page.imageUrl || !overlay || !source?.resolvePage || groups[0].figures.get(page.index) !== figure) return page;
-      const notice = showNotice && element('figcaption', '等候原站載入第 ' + page.index + ' 頁…');
+      const notice = showNotice && element('figcaption', t('waitingForPage', {page: page.index}));
       if (notice) figure.append(notice);
       try {
         const entry = await source.resolvePage(page.index, controller.signal);
         if (stopped || !liveChapter) return page;
         const resolved = entry?.index === page.index && entry.imageUrl && pageFor(source, entry);
-        if (!resolved?.imageUrl) throw new Error('原站未能載入第 ' + page.index + ' 頁。');
+        if (!resolved?.imageUrl) throw new Error(t('sitePageFailed', {page: page.index}));
         entries.set(figure, resolved);
         return resolved;
       } finally {
@@ -520,7 +525,7 @@
         }
         const timer = setTimeout(() => {
           checkNativeBuffer = null;
-          reject(new Error('原站載圖逾時'));
+          reject(new Error(t('siteImageTimeout')));
         }, 8000);
         checkNativeBuffer = () => {
           const page = entries.get(figure);
@@ -538,10 +543,9 @@
         if (stopped || group !== section) return;
         const failed = [...failedBuffers].some(([figure]) => section.figures.get(Number(figure.dataset.index)) === figure);
         bufferProgress.hidden = false;
-        bufferProgress.textContent = '已保存 ' + count + '／' + section.total + ' 頁' +
-          (failed ? ' · 有缺頁，見閱讀設定' : '');
+        bufferProgress.textContent = t(failed ? 'bufferProgressMissing' : 'bufferProgress', {count, total: section.total});
       } catch {
-        if (!stopped && group === section) bufferProgress.textContent = '無法讀取緩衝進度';
+        if (!stopped && group === section) bufferProgress.textContent = t('bufferProgressFailed');
       }
     }
     function scheduleBufferProgress() {
@@ -596,7 +600,7 @@
             resolved = await waitForNativeBuffer(figure, stillWanted);
             if (!resolved || !stillWanted()) return true;
           }
-          if (!resolved.imageUrl) throw new Error('原站尚未提供圖檔');
+          if (!resolved.imageUrl) throw new Error(t('imageNotAvailable'));
           await saveLoaded(resolved);
         }
         bufferAttempts.set(figure, resolved);
@@ -618,8 +622,8 @@
       bufferError.hidden = !missing.length;
       if (missing.length) {
         const [figure, reason] = missing[0];
-        bufferError.replaceChildren('緩衝缺 ' + missing.length + ' 頁（第 ' + figure.dataset.index + ' 頁：' + reason + '） ',
-          button('重試缺頁', () => {
+        bufferError.replaceChildren(t('bufferMissing', {count: missing.length, page: figure.dataset.index, reason}) + ' ',
+          button(t('retryPages'), () => {
             for (const [page] of missing) {
               failedBuffers.delete(page);
               bufferRetries.delete(page);
@@ -663,7 +667,7 @@
       if (obsolete()) return;
       let page = entries.get(figure);
       const img = element('img');
-      img.alt = '第 ' + page.index + ' 頁';
+      img.alt = t('pageNumber', {page: page.index});
       img.dataset.index = String(page.index);
       let blob = cached.blob;
       if (!blob) {
@@ -672,9 +676,9 @@
         if (!page.imageUrl) {
           waitingForSource.add(figure);
           if (revealNativePage(figure, page.index)) {
-            showPageRetry(figure, '等候原站載入第 ' + page.index + ' 頁…');
+            showPageRetry(figure, t('waitingForPage', {page: page.index}));
           } else {
-            figure.append(element('figcaption', '第 ' + page.index + ' 頁尚未儲存，請在原站載入此頁。'));
+            figure.append(element('figcaption', t('pageNotSavedOnSite', {page: page.index})));
           }
           return;
         }
@@ -689,7 +693,7 @@
           }
         } catch (err) {
           if (obsolete()) return;
-          figure.append(element('figcaption', '線上顯示 · ' + err.message));
+          figure.append(element('figcaption', t('onlineDisplay', {reason: err.message})));
           img.src = page.imageUrl;
         }
       }
@@ -699,7 +703,7 @@
         displayedImages.set(figure, {url:img.src, blob});
       }
       img.addEventListener('load', () => { figure.style.minHeight = ''; });
-      img.addEventListener('error', () => figure.append(element('figcaption','圖檔無法顯示')));
+      img.addEventListener('error', () => figure.append(element('figcaption',t('imageDisplayFailed'))));
       figure.prepend(img);
     }
 
@@ -857,7 +861,7 @@
       const atEnd = !paged || visibleEnd() === group.total;
       const loadedNext = paged && groups.indexOf(group) < groups.length - 1;
       previousGroup.hidden = !paged || groups.indexOf(group) < 1 || position > (mode === 'double' ? 2 : 1);
-      nextButton.textContent = loadedNext ? '下一話' : next?.same ? '接上下一頁' : '接上下一話';
+      nextButton.textContent = loadedNext ? t('nextChapter') : next?.same ? t('continuePage') : t('continueChapter');
       nextButton.disabled = busy;
       nextButton.hidden = !atEnd || (!loadedNext && !next);
       chapterActions.hidden = previousGroup.hidden && nextButton.hidden && !message.textContent;
@@ -873,7 +877,7 @@
       const next = target();
       if (!next) return;
       busy = true;
-      message.textContent = '正在接續…';
+      message.textContent = t('connecting');
       renderEnd();
       try {
         let chapter = await fetchChapter(next.url);
@@ -920,7 +924,7 @@
       maybeContinue();
     }, options);
     settingsChanged.addEventListener('change', maybeContinue, {signal:controller.signal});
-    const previousGroup = button('上一話', () => {
+    const previousGroup = button(t('previousChapter'), () => {
       group = groups[groups.indexOf(group) - 1];
       position = group.total;
       updateView();
@@ -930,7 +934,7 @@
     root.append(pane, endMarker);
     if (overlay) {
       addPages(first, false);
-      const settingsExtras = [chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal), button('關閉閱讀器', () => overlay.close())];
+      const settingsExtras = [chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal), button(t('closeReader'), () => overlay.close())];
       overlay.append(...settingsExtras, chapterActions, bufferProgress);
       getShelfEvents().changes.addEventListener('change', ({detail}) => {
         if (detail.kind === 'limit' || (detail.kind === 'saved' && detail.workId === group.chapter.workId &&
@@ -1055,15 +1059,15 @@
     const dock = element('div','', 'dock');
     dock.setAttribute('role', 'group');
     dock.setAttribute('aria-label', 'KomaGlide');
-    const status = button('書庫', openShelf);
+    const status = button(t('library'), openShelf);
     status.className = 'dock-shelf';
-    status.title = '開啟本站書庫';
+    status.title = t('openSiteLibrary');
     const count = element('span', '', 'dock-count');
     status.append(count);
     const errorNotice = element('p', '', 'dock-error');
     errorNotice.setAttribute('role', 'status');
     errorNotice.tabIndex = 0;
-    const open = button('直向閱讀器', openReader);
+    const open = button(t('verticalReader'), openReader);
     open.className = 'dock-reader';
     dock.append(open, status, errorNotice);
     root.append(dock);
@@ -1073,7 +1077,7 @@
     async function openReader() {
       if (dialog || !chapter) return;
       dialog = element('dialog');
-      dialog.setAttribute('aria-label','直向閱讀器');
+      dialog.setAttribute('aria-label',t('verticalReader'));
       const [view, parallelPreload] = await Promise.all([
         read(VIEW).catch(() => null),
         chapter.parallelPages ? read(PARALLEL_PRELOAD).catch(() => null) : null
@@ -1092,7 +1096,7 @@
       }, {once:true});
       overlayFlow = createFlow(dialog, chapter, dialog, {...view, parallelPreload});
     }
-    GM_registerMenuCommand('直向閱讀器', openReader);
+    GM_registerMenuCommand(t('verticalReader'), openReader);
     return {
       update(value) {
         const changed = chapter?.chapterId !== value.chapterId || chapter?.workId !== value.workId;
@@ -1147,7 +1151,7 @@
       if (active) return;
       const failure = [...failures.values()].find(item => isCurrentChapter(item.page));
       if (failure) {
-        show('保存暫停', failure.error);
+        show(t('savingPaused'), failure.error);
         return;
       }
       // One metadata read per burst, including writes by the reader or another tab.
@@ -1155,10 +1159,10 @@
         try {
           const count = await savedPageCount(chapterKey);
           if (revision !== statusRevision || active) return;
-          const total = chapterTotal >= count && chapterTotal > 0 ? ' / 共 ' + chapterTotal + ' 頁' : '';
-          show('已保存 ' + count + ' 頁' + total);
+          const key = chapterTotal >= count && chapterTotal > 0 ? 'savedPagesOfTotal' : 'savedPages';
+          show(t(key, {count, total: chapterTotal}));
         } catch (error) {
-          if (revision === statusRevision && !active) show('無法讀取保存頁數', error.message);
+          if (revision === statusRevision && !active) show(t('savedCountFailed'), error.message);
         }
       }, 60);
     }
@@ -1168,7 +1172,7 @@
       active = true;
       while (queue.length) {
         const {page, key} = queue.shift();
-        if (isCurrentChapter(page)) show('正在保存第 ' + page.index + ' 頁');
+        if (isCurrentChapter(page)) show(t('savingPage', {page: page.index}));
         try {
           await saveLoaded(page);
           saved.add(key);
@@ -1273,11 +1277,16 @@
     scan();
   }
 
-  GM_registerMenuCommand('開啟 KomaGlide 書庫', openShelf);
-  const start = location.hash.startsWith(SHELF_HASH) ? displayShelf : runSource;
+  const language = read(languageKey).catch(() => null);
+  async function start() {
+    setLocale(await language);
+    GM_registerMenuCommand(t('openKomaGlideLibrary'), openShelf);
+    if (location.hash.startsWith(SHELF_HASH)) displayShelf();
+    else runSource();
+  }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start, {once: true});
   } else {
-    start();
+    void start();
   }
 })();

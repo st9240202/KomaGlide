@@ -157,6 +157,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 }
 .kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }
 .kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }
+.kg-edge-toggle:lang(en) { text-orientation: mixed; }
 .kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded="true"]) {
   background: var(--hover);
   color: var(--accent);
@@ -194,11 +195,13 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 }
 .kg-edge-panel > label {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: .6rem;
   font-size: .875rem;
 }
+.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }
 .kg-edge-panel > label:has(input) { justify-content: start; }
 .kg-edge-extras {
   display: grid;

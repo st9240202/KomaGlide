@@ -1,18 +1,17 @@
 // Run with playwright-core and its WebKit installed. Exercise WebKit's ephemeral IndexedDB.
 const assert = require('node:assert/strict');
-const { readFile } = require('node:fs/promises');
 const path = require('node:path');
 const { webkit } = require('playwright-core');
 
 async function run() {
-  const storeSource = await readFile(path.join(__dirname, '../library/store.js'), 'utf8');
   const browser = await webkit.launch();
   try {
     const page = await browser.newPage();
     await page.route('https://reader.test/**', route => route.fulfill({ contentType: 'text/html', body: '<title>Fixture</title>' }));
-    await page.addInitScript(source => {
-      window.store = import(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
-    }, storeSource);
+    await page.route('https://reader.test/{store,i18n}.js', route => {
+      const file = new URL(route.request().url()).pathname;
+      return route.fulfill({ path: path.join(__dirname, '../library', file), contentType: 'application/javascript' });
+    });
     await page.goto('https://reader.test/');
 
     const key = { site: 'https://reader.test', workId: 'work', chapterId: 'chapter' };
@@ -24,7 +23,7 @@ async function run() {
         return add.call(this, record, key);
       };
       try {
-        const { putPage } = await window.store;
+        const { putPage } = await import('/store.js');
         for (const index of [1, 2, 2]) {
           const blob = new Blob([new Uint8Array([index, 255, 0])], { type: 'image/png' });
           await putPage({ ...key, index }, blob);
@@ -37,7 +36,7 @@ async function run() {
 
     await page.reload();
     const result = await page.evaluate(async key => {
-      const { lookupPage, readerBlob, shelf } = await window.store;
+      const { lookupPage, readerBlob, shelf } = await import('/store.js');
       const first = (await lookupPage({ ...key, index: 1 }, true)).blob;
       const second = await readerBlob([key.site, key.workId, key.chapterId], 2);
       const rows = await Promise.all([first, second].map(async blob => [blob.type, ...new Uint8Array(await blob.arrayBuffer())]));

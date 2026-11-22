@@ -1,15 +1,16 @@
+import { t } from './i18n.js';
 import { putPage, lookupPage } from './store.js';
 
 async function prepareShell() {
-  if (!navigator.serviceWorker) throw new Error('請從 HTTPS 或 localhost 開啟書庫，才能準備離線介面。');
+  if (!navigator.serviceWorker) throw new Error(t('offlineRequiresSecure'));
   const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
   if (!registration.active) {
     const first = registration.installing || registration.waiting;
-    if (!first) throw new Error('書庫未能安裝離線介面，請連線後重新整理。');
+    if (!first) throw new Error(t('offlineSetupFailed'));
     await new Promise((resolve, reject) => {
       function check() {
         if (first.state === 'activated') resolve();
-        else if (first.state === 'redundant') reject(new Error('離線介面安裝失敗，請連線後重新整理。'));
+        else if (first.state === 'redundant') reject(new Error(t('offlineInstallFailed')));
         else return;
         first.removeEventListener('statechange', check);
       }
@@ -20,7 +21,7 @@ async function prepareShell() {
   return registration;
 }
 
-export const shell = prepareShell();
+export const shell = Promise.resolve().then(prepareShell);
 shell.catch(() => {}); // Observed separately by the UI and individual transfer requests.
 
 export const changes = new EventTarget();
@@ -32,8 +33,8 @@ export function announce(detail) {
 }
 
 export function messageFor(error) {
-  if (error?.name === 'QuotaExceededError') return '瀏覽器儲存空間不足，請釋放磁碟空間後重試。';
-  return error?.message || '無法存取本機書庫，請再試一次。';
+  if (error?.name === 'QuotaExceededError') return t('quotaExceeded');
+  return error?.message || t('offlineAccessFailed');
 }
 
 window.addEventListener('message', async event => {

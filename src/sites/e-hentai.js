@@ -69,7 +69,7 @@ siteAdapters.push(function detectEHentai(root, address) {
     if (batch) url.searchParams.set('p', batch);
     const parsed = await fetchDocument(url.href, signal);
     if (parsed.address.origin !== address.origin || parsed.address.pathname !== galleryUrl.pathname ||
-        !ehReadGallery(parsed.root, parsed.address, id, directory)) throw new Error('無法讀取圖庫目錄');
+        !ehReadGallery(parsed.root, parsed.address, id, directory)) throw new Error(t('galleryFailed'));
   }
   function loadBatch(batch, signal) {
     let pending = directory.batches.get(signal);

@@ -9,7 +9,7 @@ const { chromium } = require("playwright-core");
 const GiB = 1024 ** 3;
 const firstSite = "https://reader.example";
 const secondSite = "https://other.example";
-const storePath = path.resolve(__dirname, "../library/store.js");
+const libraryPath = path.resolve(__dirname, "../library");
 
 async function run() {
   const profile = await mkdtemp(path.join(os.tmpdir(), "komaglide-capacity-"));
@@ -21,7 +21,9 @@ async function run() {
     await context.route("**/*", route => {
       const { origin, pathname } = new URL(route.request().url());
       if (origin !== firstSite && origin !== secondSite) return route.abort();
-      if (pathname === "/store.js") return route.fulfill({ path: storePath, contentType: "application/javascript" });
+      if (pathname === "/store.js" || pathname === "/i18n.js") {
+        return route.fulfill({ path: path.join(libraryPath, pathname), contentType: "application/javascript" });
+      }
       if (pathname === "/") return route.fulfill({ body: "<!doctype html><title>Capacity test</title>", contentType: "text/html" });
       return route.abort();
     });

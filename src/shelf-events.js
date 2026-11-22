@@ -19,8 +19,8 @@ function getShelfEvents() {
     },
     messageFor(error) {
       return error?.name === 'QuotaExceededError'
-        ? '瀏覽器儲存空間不足，請釋放空間後再試。'
-        : error?.message || '無法存取本站書庫。';
+        ? t('quotaExceeded')
+        : error?.message || t('libraryAccessFailed');
     }
   };
   return shelfEvents;

@@ -1,10 +1,13 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.10
+// @version      0.7.11
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
+// @description:en Read and save comic pages, and open your site library from the script menu.
+// @description:ja 漫画ページを読みながら画像を保存し、スクリプトメニューからサイトの本棚を開けます。
+// @description:zh-CN 在漫画页面阅读、保存图片，并从脚本菜单打开本站书库。
 // @match        http://*/*
 // @match        https://*/*
 // @noframes
@@ -42,6 +45,187 @@
       return null;
     }
   }
+
+  const localeNames = { 'zh-Hant': '繁體中文', en: 'English', ja: '日本語', 'zh-Hans': '简体中文' };
+let locale = 'zh-Hant';
+
+function setLocale(value) {
+  locale = typeof value === 'string' && Object.hasOwn(localeNames, value) ? value : 'zh-Hant';
+}
+
+const translations = {
+  // Traditional Chinese is the default. Columns follow the order in localeNames.
+  language: ['語言', 'Language', '言語', '语言'],
+  languageSaveFailed: ['無法儲存語言設定，請再試一次。', 'Could not save the language preference. Try again.', '言語設定を保存できませんでした。もう一度お試しください。', '无法保存语言设置，请重试。'],
+  library: ['書庫', 'Library', '本棚', '书库'],
+  siteLibrary: ['本站書庫', 'Site Library', 'このサイトの本棚', '本站书库'],
+  offlineLibrary: ['離線書庫', 'Offline Library', 'オフライン本棚', '离线书库'],
+  siteLibraryHome: ['KomaGlide 本站書庫首頁', 'KomaGlide Site Library home', 'KomaGlide このサイトの本棚のトップ', 'KomaGlide 本站书库首页'],
+  offlineLibraryHome: ['KomaGlide 離線書庫首頁', 'KomaGlide Offline Library home', 'KomaGlide オフライン本棚のトップ', 'KomaGlide 离线书库首页'],
+  preparingLibrary: ['準備離線書庫中', 'Preparing Offline Library', 'オフライン本棚を準備中', '正在准备离线书库'],
+  offlineReady: ['可離線開啟', 'Available offline', 'オフラインで利用可能', '可离线打开'],
+  offlineReading: ['離線閱讀中', 'Reading offline', 'オフラインで閲覧中', '正在离线阅读'],
+  offlineUnavailable: ['離線介面尚未就緒', 'Offline interface is not ready', 'オフライン画面の準備ができていません', '离线界面尚未就绪'],
+  appearance: ['外觀', 'Appearance', '外観', '外观'],
+  systemTheme: ['跟隨系統', 'System', 'システムに合わせる', '跟随系统'],
+  lightTheme: ['淺色', 'Light', 'ライト', '浅色'],
+  darkTheme: ['深色', 'Dark', 'ダーク', '深色'],
+  storageSettings: ['容量設定', 'Storage Settings', '容量設定', '容量设置'],
+  libraryFilters: ['書庫篩選', 'Library filters', '本棚の絞り込み', '书库筛选'],
+  allWorks: ['全部作品', 'All Works', 'すべての作品', '全部作品'],
+  favorites: ['收藏', 'Favorites', 'お気に入り', '收藏'],
+  backToLibrary: ['返回書庫', 'Back to Library', '本棚に戻る', '返回书库'],
+  storageLimit: ['書庫容量上限（MiB）', 'Library storage limit (MiB)', '本棚の容量上限（MiB）', '书库容量上限（MiB）'],
+  saveLimit: ['儲存上限', 'Save Limit', '上限を保存', '保存上限'],
+  limitHint: ['收藏和一般快取共用容量。調低上限時，書庫會從最久沒讀、尚未收藏的一話開始，整話移除。', 'Favorites and cached pages share this storage. Lowering the limit removes whole chapters, starting with the least recently read chapter that isn’t a favorite.', 'お気に入りとキャッシュは容量を共有します。上限を下げると、お気に入りに入っていない話のうち、最後に読んだ時期が古いものから話単位で削除されます。', '收藏和普通缓存共用容量。调低上限时，书库会从最久未读、尚未收藏的一话开始，整话移除。'],
+  storageProtection: ['瀏覽器儲存保護', 'Browser Storage Protection', 'ブラウザーのストレージ保護', '浏览器存储保护'],
+  storageProtectionHint: ['空間不足時，瀏覽器可能清除未受保護的網站資料。', 'The browser may clear unprotected site data when storage runs low.', '空き容量が少なくなると、ブラウザーが保護されていないサイトデータを削除する場合があります。', '空间不足时，浏览器可能清除未受保护的网站数据。'],
+  requestPersistence: ['申請持久儲存', 'Request Persistent Storage', '永続ストレージをリクエスト', '申请持久存储'],
+  chapterNavigation: ['話數導覽', 'Chapter navigation', '話の移動', '章节导航'],
+  thumbnails: ['小圖選頁', 'Page Thumbnails', 'サムネイルでページ選択', '缩略图选页'],
+  thumbnailSize: ['縮圖大小', 'Thumbnail Size', 'サムネイルのサイズ', '缩略图大小'],
+  small: ['小', 'Small', '小', '小'],
+  medium: ['中', 'Medium', '中', '中'],
+  large: ['大', 'Large', '大', '大'],
+  close: ['關閉', 'Close', '閉じる', '关闭'],
+  closeThumbnails: ['關閉小圖', 'Close page thumbnails', 'サムネイルを閉じる', '关闭缩略图'],
+  previousBatch: ['上一組', 'Previous Set', '前の組', '上一组'],
+  nextBatch: ['下一組', 'Next Set', '次の組', '下一组'],
+  noPreview: ['無預覽', 'No preview', 'プレビューなし', '无预览'],
+  pageCount: ['{count} 頁', '{count} pages', '{count} ページ', '{count} 页'],
+  pageCountOne: ['{count} 頁', '{count} page', '{count} ページ', '{count} 页'],
+  pageRange: ['{start}–{end} / {total} 頁', '{start}–{end} of {total} pages', '{start}–{end} / {total} ページ', '{start}–{end} / {total} 页'],
+  pageNumber: ['第 {page} 頁', 'Page {page}', '{page} ページ', '第 {page} 页'],
+  readerSettings: ['閱讀設定', 'Reading Settings', '閲覧設定', '阅读设置'],
+  settings: ['設定', 'Settings', '設定', '设置'],
+  pageNavigation: ['頁面導覽', 'Page Navigation', 'ページ移動', '页面导航'],
+  navigation: ['導覽', 'Navigate', '移動', '导航'],
+  readingMode: ['閱讀模式', 'Reading Mode', '閲覧モード', '阅读模式'],
+  verticalScroll: ['直向捲動', 'Vertical Scroll', '縦スクロール', '纵向滚动'],
+  singlePage: ['單頁', 'Single Page', '単ページ', '单页'],
+  doublePage: ['雙頁', 'Double Page', '見開き', '双页'],
+  bufferMode: ['緩衝模式', 'Preload Mode', '先読みモード', '缓冲模式'],
+  bufferChapter: ['停留時緩衝整話', 'Preload chapter when idle', '操作を止めると全ページを先読み', '停留时预载整话'],
+  bufferAhead: ['只預載後面 3 頁', 'Preload next 3 pages', '次の3ページだけ先読み', '只预载后面 3 页'],
+  parallelPreload: ['並行預載數', 'Parallel Preloads', '同時先読み数', '并行预载数'],
+  pageDirection: ['翻頁方向', 'Reading Direction', 'ページをめくる方向', '翻页方向'],
+  rtl: ['從右到左', 'Right to Left', '右から左', '从右到左'],
+  ltr: ['從左到右', 'Left to Right', '左から右', '从左到右'],
+  tapToTurn: ['點按翻頁', 'Tap to Turn Pages', 'タップでページをめくる', '点击翻页'],
+  previousPage: ['上一頁', 'Previous Page', '前のページ', '上一页'],
+  nextPage: ['下一頁', 'Next Page', '次のページ', '下一页'],
+  tapRtl: ['點畫面左側前進，右側返回', 'Tap left to advance and right to go back', '画面左側をタップで次へ、右側で前へ', '点击屏幕左侧前进，右侧返回'],
+  tapLtr: ['點畫面右側前進，左側返回', 'Tap right to advance and left to go back', '画面右側をタップで次へ、左側で前へ', '点击屏幕右侧前进，左侧返回'],
+  previousChapter: ['上一話', 'Previous Chapter', '前の話', '上一话'],
+  nextChapter: ['下一話', 'Next Chapter', '次の話', '下一话'],
+  continuePage: ['接上下一頁', 'Continue to Next Page', '次のページを表示', '接上下一页'],
+  continueChapter: ['接上下一話', 'Continue to Next Chapter', '次の話を表示', '接上下一话'],
+  connecting: ['正在接續…', 'Loading next section…', '続きのページを読み込み中…', '正在接续…'],
+  autoContinue: ['自動接下一話', 'Continue Automatically', '自動で次の話へ', '自动接下一话'],
+  closeReader: ['關閉閱讀器', 'Close Reader', 'リーダーを閉じる', '关闭阅读器'],
+  openSiteLibrary: ['開啟本站書庫', 'Open Site Library', 'このサイトの本棚を開く', '打开本站书库'],
+  openKomaGlideLibrary: ['開啟 KomaGlide 書庫', 'Open KomaGlide Library', 'KomaGlide の本棚を開く', '打开 KomaGlide 书库'],
+  verticalReader: ['直向閱讀器', 'Vertical Reader', '縦読みリーダー', '纵向阅读器'],
+  retry: ['重試', 'Retry', '再試行', '重试'],
+  retryPages: ['重試缺頁', 'Retry Missing Pages', '未取得のページを再試行', '重试缺页'],
+  waitingForPage: ['等候原站載入第 {page} 頁…', 'Waiting for the site to load page {page}…', 'サイトが {page} ページを読み込むのを待っています…', '等待原网站加载第 {page} 页…'],
+  sitePageFailed: ['原站未能載入第 {page} 頁。', 'The site could not load page {page}.', 'サイトが {page} ページを読み込めませんでした。', '原网站未能加载第 {page} 页。'],
+  pageNotSavedOnSite: ['第 {page} 頁尚未儲存，請在原站載入此頁。', 'Page {page} is not saved. Load it on the original site.', '{page} ページは未保存です。元のサイトで開いてください。', '第 {page} 页尚未保存，请在原网站加载此页。'],
+  bufferProgress: ['已保存 {count}／{total} 頁', 'Pages saved: {count}/{total}', '保存済み {count}／{total} ページ', '已保存 {count}／{total} 页'],
+  bufferProgressMissing: ['已保存 {count}／{total} 頁 · 有缺頁，見閱讀設定', 'Pages saved: {count}/{total} · See Reading Settings for missing pages', '保存済み {count}／{total} ページ · 未取得のページは閲覧設定を確認', '已保存 {count}／{total} 页 · 有缺页，请查看阅读设置'],
+  bufferProgressFailed: ['無法讀取緩衝進度', 'Could not read preload progress', '先読みの進行状況を取得できません', '无法读取缓冲进度'],
+  bufferMissing: ['緩衝缺 {count} 頁（第 {page} 頁：{reason}）', 'Pages missing: {count} (page {page}: {reason})', '未取得 {count} ページ（{page} ページ：{reason}）', '缓冲缺 {count} 页（第 {page} 页：{reason}）'],
+  onlineDisplay: ['線上顯示 · {reason}', 'Showing online · {reason}', 'オンラインで表示 · {reason}', '在线显示 · {reason}'],
+  imageDisplayFailed: ['圖檔無法顯示', 'Image could not be displayed', '画像を表示できません', '无法显示图片'],
+  savingPaused: ['保存暫停', 'Saving paused', '保存を一時停止', '保存暂停'],
+  savedPages: ['已保存 {count} 頁', 'Pages saved: {count}', '保存済み {count} ページ', '已保存 {count} 页'],
+  savedPagesOfTotal: ['已保存 {count} 頁 / 共 {total} 頁', 'Pages saved: {count}/{total}', '保存済み {count}／{total} ページ', '已保存 {count} 页 / 共 {total} 页'],
+  savedCountFailed: ['無法讀取保存頁數', 'Could not read the saved page count', '保存済みのページ数を取得できません', '无法读取已保存页数'],
+  savingPage: ['正在保存第 {page} 頁', 'Saving page {page}', '{page} ページを保存中', '正在保存第 {page} 页'],
+  persistenceGranted: ['瀏覽器已授予持久儲存。', 'The browser granted persistent storage.', 'ブラウザーが永続ストレージを許可しました。', '浏览器已授予持久存储。'],
+  persistenceNotGranted: ['本站目前尚未獲得持久儲存保護。', 'This site does not have persistent storage protection.', 'このサイトのデータは永続ストレージで保護されていません。', '本站目前尚未获得持久存储保护。'],
+  persistenceDenied: ['瀏覽器未核准這次持久儲存申請。', 'The browser declined the persistent storage request.', 'ブラウザーが永続ストレージのリクエストを拒否しました。', '浏览器未批准此次持久存储申请。'],
+  persistenceCheckUnsupported: ['目前的瀏覽器環境未提供持久儲存查詢功能。', 'This browser cannot check persistent storage status.', 'このブラウザーでは永続ストレージの状態を確認できません。', '当前浏览器不支持查询持久存储状态。'],
+  persistenceRequestUnsupported: ['目前的瀏覽器環境未提供持久儲存申請功能。', 'This browser cannot request persistent storage.', 'このブラウザーでは永続ストレージをリクエストできません。', '当前浏览器不支持申请持久存储。'],
+  persistenceCheckFailed: ['瀏覽器查詢持久儲存時發生錯誤。', 'Could not check persistent storage status.', '永続ストレージの状態を確認できませんでした。', '查询持久存储状态时发生错误。'],
+  persistenceRequestFailed: ['瀏覽器申請持久儲存時發生錯誤。', 'Could not request persistent storage.', '永続ストレージをリクエストできませんでした。', '申请持久存储时发生错误。'],
+  returnedFalse: ['{api} 回傳 false', '{api} returned false', '{api} が false を返しました', '{api} 返回 false'],
+  checkingPersistence: ['正在查詢本站的持久儲存狀態。', 'Checking persistent storage for this site…', 'このサイトの永続ストレージの状態を確認中…', '正在查询本站的持久存储状态。'],
+  requestingPersistence: ['正在向瀏覽器申請持久儲存。', 'Requesting persistent storage…', '永続ストレージをリクエスト中…', '正在向浏览器申请持久存储。'],
+  savedKnownTotal: ['已存 {count} / {total} 頁', 'Pages saved: {count}/{total}', '保存済み {count}／{total} ページ', '已存 {count} / {total} 页'],
+  savedUnknownTotal: ['已存 {count} 頁 · 總頁數未知', 'Pages saved: {count} · Total unknown', '保存済み {count} ページ · 総ページ数不明', '已存 {count} 页 · 总页数未知'],
+  favoriteWork: ['收藏作品', 'Favorite Work', '作品をお気に入りに追加', '收藏作品'],
+  favoritedWork: ['已收藏作品', 'Work Favorited', '作品はお気に入りに登録済み', '已收藏作品'],
+  favoriteChapter: ['收藏單話', 'Favorite Chapter', 'この話をお気に入りに追加', '收藏单话'],
+  favoritedChapter: ['已收藏單話', 'Chapter Favorited', 'この話はお気に入りに登録済み', '已收藏单话'],
+  removedFavorite: ['已取消收藏。', 'Removed from favorites.', 'お気に入りから削除しました。', '已取消收藏。'],
+  addedFavorite: ['已收藏。', 'Added to favorites.', 'お気に入りに追加しました。', '已收藏。'],
+  storageDiagnostics: ['查看儲存診斷', 'View Storage Diagnostics', 'ストレージの詳細を見る', '查看存储诊断'],
+  ungrouped: ['尚未歸入作品', 'Unassigned Chapters', '作品未分類', '尚未归入作品'],
+  chapterCount: ['{count} 話', '{count} chapters', '{count} 話', '{count} 话'],
+  chapterCountOne: ['{count} 話', '{count} chapter', '{count} 話', '{count} 话'],
+  noFavorites: ['還沒有收藏', 'No Favorites Yet', 'お気に入りはまだありません', '还没有收藏'],
+  noComics: ['書架上還沒有漫畫', 'Your Library Is Empty', '本棚に漫画がありません', '书架上还没有漫画'],
+  favoritesHint: ['在全部作品中收藏作品或單話，即可在這裡找到。', 'Favorite a work or chapter in All Works to find it here.', '「すべての作品」で作品や話をお気に入りに追加すると、ここに表示されます。', '在全部作品中收藏作品或单话，即可在这里找到。'],
+  emptyShelfHint: ['安裝 KomaGlide 腳本後，到支援的漫畫頁閱讀。已儲存的頁面會自動出現在這裡。', 'Install KomaGlide and read a chapter on a supported site. Saved pages will appear here.', 'KomaGlide をインストールして対応サイトで漫画を読むと、保存したページがここに表示されます。', '安装 KomaGlide 脚本后，到支持的漫画页阅读。已保存的页面会自动出现在这里。'],
+  pageRemoved: ['此頁已從書庫移除。', 'This page was removed from the library.', 'このページは本棚から削除されました。', '此页已从书库移除。'],
+  decodeFailed: ['第 {page} 頁的圖片無法解碼。', 'The image for page {page} could not be decoded.', '{page} ページの画像を読み取れませんでした。', '第 {page} 页的图片无法解码。'],
+  missingPages: ['第 {range} 頁尚未儲存', 'Not saved: {range}', '{range} ページは未保存です', '第 {range} 页尚未保存'],
+  loadingChapter: ['載入這一話中', 'Loading Chapter', '話を読み込み中', '正在加载这一话'],
+  invalidChapterUrl: ['這個閱讀網址不完整，請返回書庫重新選話。', 'This reading link is incomplete. Go back to the library and select a chapter.', '閲覧リンクが不完全です。本棚に戻って話を選び直してください。', '此阅读链接不完整，请返回书库重新选择章节。'],
+  chapterNotFound: ['書庫裡找不到這一話，請返回書庫選擇其他話。', 'This chapter is missing. Go back to the library and pick another chapter.', 'この話は本棚にありません。本棚に戻って別の話を選んでください。', '书库里找不到这一话，请返回书库选择其他章节。'],
+  chapterOpenFailed: ['無法開啟這一話', 'Could Not Open Chapter', 'この話を開けません', '无法打开这一话'],
+  storageUsage: ['已使用 {used}，目前上限 {limit}。', '{used} used out of {limit}.', '{used} 使用中。上限は {limit} です。', '已使用 {used}，当前上限 {limit}。'],
+  storageLimitSaved: ['已更新書庫容量上限。', 'Library storage limit updated.', '本棚の容量上限を更新しました。', '已更新书库容量上限。'],
+  newPagesSaved: ['這一話有新儲存的頁面。', 'New pages were saved for this chapter.', 'この話に新しく保存されたページがあります。', '这一话有新保存的页面。'],
+  refreshPages: ['更新頁面', 'Refresh Pages', 'ページを更新', '更新页面'],
+  quotaExceeded: ['瀏覽器儲存空間不足，請釋放空間後再試。', 'Browser storage is full. Free up space and try again.', 'ブラウザーの保存領域が不足しています。空き容量を確保して再試行してください。', '浏览器存储空间不足，请释放空间后再试。'],
+  libraryAccessFailed: ['無法存取本站書庫。', 'Could not access the site library.', 'このサイトの本棚にアクセスできません。', '无法访问本站书库。'],
+  offlineAccessFailed: ['無法存取本機書庫，請再試一次。', 'Could not access the local library. Try again.', 'ローカルの本棚にアクセスできません。再試行してください。', '无法访问本地书库，请重试。'],
+  writeAborted: ['書庫寫入已中斷，請重試。', 'The library write was interrupted. Try again.', '本棚への保存が中断されました。再試行してください。', '书库写入已中断，请重试。'],
+  incompletePage: ['頁面識別資料不完整，無法存取漫畫頁。', 'The page could not be identified in the library.', 'ページの識別情報が不足しているため、本棚からアクセスできません。', '页面识别信息不完整，无法访问漫画页。'],
+  insufficientStorage: ['容量不足。請調高書庫上限或解除收藏，再重新儲存。', 'The library is full. Raise the storage limit or remove some favorites, then try again.', '本棚の空き容量がありません。容量上限を上げるか、お気に入りを解除して再試行してください。', '容量不足。请调高书库上限或取消部分收藏后重试。'],
+  emptyImage: ['圖片沒有內容，請重新載入這一頁。', 'The image is empty. Reload this page.', '画像が空です。このページを読み込み直してください。', '图片没有内容，请重新加载这一页。'],
+  chapterTooLarge: ['這一話的圖片超過書庫上限。請調高上限後重試。', 'This chapter exceeds the library storage limit. Raise the limit and try again.', 'この話の画像は本棚の容量上限を超えています。上限を上げて再試行してください。', '这一话的图片超过书库上限。请调高上限后重试。'],
+  invalidLimit: ['請輸入有效的容量上限。', 'Enter a valid storage limit.', '有効な容量上限を入力してください。', '请输入有效的容量上限。'],
+  noWork: ['尚未確認這一話所屬的作品。', 'The work this chapter belongs to is unknown.', 'この話がどの作品に属するか確認できません。', '尚未确认这一话所属的作品。'],
+  chapterRemoved: ['書庫已移除這一話，請重新開啟書架。', 'This chapter was removed. Reopen the library.', 'この話は本棚から削除されました。本棚を開き直してください。', '书库已移除这一话，请重新打开书库。'],
+  offlineRequiresSecure: ['請從 HTTPS 或 localhost 開啟書庫，才能準備離線介面。', 'Open the library over HTTPS or localhost to set up offline access.', 'オフラインで利用できるようにするには、HTTPS または localhost から本棚を開いてください。', '请通过 HTTPS 或 localhost 打开书库，以准备离线界面。'],
+  offlineSetupFailed: ['書庫未能安裝離線介面，請連線後重新整理。', 'Could not set up offline access. Connect to the internet and reload.', 'オフラインで利用する準備ができませんでした。インターネットに接続して再読み込みしてください。', '书库未能安装离线界面，请联网后刷新。'],
+  offlineInstallFailed: ['離線介面安裝失敗，請連線後重新整理。', 'Offline setup failed. Connect to the internet and reload.', 'オフラインで利用するための設定に失敗しました。インターネットに接続して再読み込みしてください。', '离线界面安装失败，请联网后刷新。'],
+  galleryFailed: ['無法讀取圖庫目錄', 'Could not load the gallery index', 'ギャラリーの目次を読み込めません', '无法读取图库目录'],
+  unsupportedImage: ['圖檔格式不支援', 'Unsupported image format', '対応していない画像形式です', '不支持此图片格式'],
+  imageReadFailed: ['無法讀取漫畫圖檔', 'Could not load the comic image', '漫画画像を読み込めません', '无法读取漫画图片'],
+  imageHttpStatus: ['圖站回應 HTTP {status}', 'Image host returned HTTP {status}', '画像サーバーが HTTP {status} を返しました', '图片服务器返回 HTTP {status}'],
+  onlineOnly: ['此圖片限線上閱讀', 'This image is available online only', 'この画像はオンラインでのみ閲覧できます', '此图片仅限在线阅读'],
+  imageHttpFailed: ['讀取圖檔失敗（HTTP {status}）', 'Could not load the image (HTTP {status})', '画像を読み込めませんでした（HTTP {status}）', '读取图片失败（HTTP {status}）'],
+  imageTooLarge: ['單頁超過 32 MiB', 'This page exceeds 32 MiB', 'ページの画像が 32 MiB を超えています', '单页超过 32 MiB'],
+  blankImage: ['圖檔為空', 'The image is empty', '画像ファイルが空です', '图片文件为空'],
+  nextPageNotHtml: ['下一頁沒有傳回章節網頁', 'The next page did not return chapter HTML', '次のページから話の HTML が取得できませんでした', '下一页未返回章节网页'],
+  chapterHtmlTooLarge: ['章節網頁過大', 'The chapter HTML is too large', '話の HTML が大きすぎます', '章节网页过大'],
+  nextChapterUnrecognized: ['無法辨識接續章節', 'Could not identify the next chapter', '次の話を識別できません', '无法识别后续章节'],
+  siteImageTimeout: ['原站載圖逾時', 'The site timed out loading the image', 'サイトでの画像読み込みがタイムアウトしました', '原网站加载图片超时'],
+  imageNotAvailable: ['原站尚未提供圖檔', 'The site has not provided the image yet', 'サイトから画像をまだ取得できません', '原网站尚未提供图片'],
+};
+
+const locales = Object.keys(localeNames);
+
+function t(key, values) {
+  const message = translations[key][locales.indexOf(locale)];
+  return values ? message.replace(/\{(\w+)\}/g, (_, name) => values[name]) : message;
+}
+
+const languageKey = 'kg1.language';
+
+function localizeDocument() {
+  document.documentElement.lang = locale;
+  for (const node of document.querySelectorAll('[data-i18n]')) {
+    node.textContent = t(node.dataset.i18n);
+  }
+  for (const node of document.querySelectorAll('[data-i18n-label]')) {
+    node.setAttribute('aria-label', t(node.dataset.i18nLabel));
+  }
+}
 
   const DB_NAME = 'komaglide-library-v1';
 const MiB = 1024 ** 2;
@@ -87,7 +271,7 @@ async function transaction(names, mode, run) {
     let result;
     let failure;
     tx.oncomplete = () => resolve(result);
-    tx.onabort = () => reject(failure || tx.error || new Error('書庫寫入已中斷，請重試。'));
+    tx.onabort = () => reject(failure || tx.error || new Error(t('writeAborted')));
     Promise.resolve().then(() => run(tables)).then(value => {
       result = value;
     }, error => {
@@ -110,7 +294,7 @@ function identity(page) {
   if (!page || typeof page.site !== 'string' || !page.site || typeof page.chapterId !== 'string' || !page.chapterId ||
       (page.workId != null && typeof page.workId !== 'string') ||
       !Number.isSafeInteger(page.index) || page.index < 1) {
-    throw new Error('頁面識別資料不完整，無法存取漫畫頁。');
+    throw new Error(t('incompletePage'));
   }
   return [page.site, page.workId || '', page.chapterId];
 }
@@ -134,7 +318,7 @@ async function makeRoom(tables, state, required, skipKey) {
   let bytes = 0;
   let count = 0;
   while (count < candidates.length && bytes < required) bytes += candidates[count++].bytes;
-  if (bytes < required) throw new Error('容量不足。請調高書庫上限或解除收藏，再重新儲存。');
+  if (bytes < required) throw new Error(t('insufficientStorage'));
   for (const { key } of candidates.slice(0, count)) {
     tables.chapters.delete(key);
     tables.pages.delete(indices(key));
@@ -148,7 +332,7 @@ function title(value, fallback) {
 
 async function putPage(page, blob) {
   const key = identity(page);
-  if (!(blob instanceof Blob) || !blob.size) throw new Error('圖片沒有內容，請重新載入這一頁。');
+  if (!(blob instanceof Blob) || !blob.size) throw new Error(t('emptyImage'));
   let blobRejected = false;
   function save(image) {
     return transaction(stores, 'readwrite', async tables => {
@@ -159,7 +343,7 @@ async function putPage(page, blob) {
       const chapter = previous || { key, favorite: false, count: 0, bytes: 0, total: null };
       if (!present) {
         if (blob.size + chapter.bytes > state.limit) {
-          throw new Error('這一話的圖片超過書庫上限。請調高上限後重試。');
+          throw new Error(t('chapterTooLarge'));
         }
         await makeRoom(tables, state, state.used + blob.size - state.limit, key);
         try {
@@ -273,7 +457,7 @@ async function readerBlob(key, index) {
 }
 
 async function setLimit(bytes) {
-  if (!Number.isSafeInteger(bytes) || bytes < 1) throw new Error('請輸入有效的容量上限。');
+  if (!Number.isSafeInteger(bytes) || bytes < 1) throw new Error(t('invalidLimit'));
   return transaction(stores, 'readwrite', async tables => {
     const state = await readState(tables.settings);
     await makeRoom(tables, state, state.used - bytes);
@@ -285,13 +469,13 @@ async function setLimit(bytes) {
 async function setFavorite(key, enabled) {
   return transaction(['chapters', 'favoriteWorks'], 'readwrite', async tables => {
     if (key.length === 2) {
-      if (!key[1]) throw new Error('尚未確認這一話所屬的作品。');
+      if (!key[1]) throw new Error(t('noWork'));
       if (enabled) tables.favoriteWorks.put(true, key);
       else tables.favoriteWorks.delete(key);
       return;
     }
     const chapter = await request(tables.chapters.get(key));
-    if (!chapter) throw new Error('書庫已移除這一話，請重新開啟書架。');
+    if (!chapter) throw new Error(t('chapterRemoved'));
     chapter.favorite = enabled;
     tables.chapters.put(chapter, key);
   });
@@ -318,8 +502,8 @@ function getShelfEvents() {
     },
     messageFor(error) {
       return error?.name === 'QuotaExceededError'
-        ? '瀏覽器儲存空間不足，請釋放空間後再試。'
-        : error?.message || '無法存取本站書庫。';
+        ? t('quotaExceeded')
+        : error?.message || t('libraryAccessFailed');
     }
   };
   return shelfEvents;
@@ -330,12 +514,31 @@ function notifyPageSaved({site, workId, chapterId}) {
 }
 
   
-function mountShelf(routePrefix, { announce, changes, messageFor }) {
+function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }) {
+  localizeDocument();
   const $ = id => document.getElementById(id);
+  const languagePicker = $('library-language');
+  for (const [value, label] of Object.entries(localeNames)) {
+    const option = new Option(label, value);
+    option.lang = value;
+    languagePicker.add(option);
+  }
+  languagePicker.value = locale;
+  languagePicker.addEventListener('change', async () => {
+    languagePicker.disabled = true;
+    try {
+      await saveLanguage(languagePicker.value);
+      location.reload();
+    } catch {
+      languagePicker.value = locale;
+      languagePicker.disabled = false;
+      notify(t('languageSaveFailed'));
+    }
+  });
   for (const link of document.querySelectorAll('a[href^="#"]')) {
     link.hash = routePrefix + link.hash.slice(1);
   }
-  const collator = new Intl.Collator('zh-Hant', { numeric: true });
+  const collator = new Intl.Collator(locale, { numeric: true });
   let version = 0;
   let refreshTimer;
   let disposePages = () => {};
@@ -413,28 +616,26 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
     }
   }
 
-  function storageProtectionMessage({state}, action) {
-    if (state === 'granted') return '瀏覽器已授予持久儲存。';
-    if (state === 'not-granted') return action === '查詢'
-      ? '本站目前尚未獲得持久儲存保護。'
-      : '瀏覽器未核准這次持久儲存申請。';
-    if (state === 'unsupported') return '目前的瀏覽器環境未提供持久儲存' + action + '功能。';
-    return '瀏覽器' + action + '持久儲存時發生錯誤。';
+  function storageProtectionMessage({state}, isRequest) {
+    if (state === 'granted') return t('persistenceGranted');
+    if (state === 'not-granted') return t(isRequest ? 'persistenceDenied' : 'persistenceNotGranted');
+    if (state === 'unsupported') return t(isRequest ? 'persistenceRequestUnsupported' : 'persistenceCheckUnsupported');
+    return t(isRequest ? 'persistenceRequestFailed' : 'persistenceCheckFailed');
   }
 
-  function showStorageDiagnostic(element, result, action, api) {
-    element.textContent = storageProtectionMessage(result, action);
+  function showStorageDiagnostic(element, result, isRequest, api) {
+    element.textContent = storageProtectionMessage(result, isRequest);
     if (result.state === 'granted') return;
-    const detail = result.state === 'not-granted' ? api + ' 回傳 false' : [api, result.detail].filter(Boolean).join(' · ');
+    const detail = result.state === 'not-granted' ? t('returnedFalse', {api}) : [api, result.detail].filter(Boolean).join(' · ');
     element.append(el('span', detail, 'notice-detail'));
   }
 
   async function checkStorageProtection() {
     const check = ++retentionCheck;
     const status = $('retention');
-    status.textContent = '正在查詢本站的持久儲存狀態。';
+    status.textContent = t('checkingPersistence');
     const result = await readStorageProtection('persisted');
-    if (check === retentionCheck) showStorageDiagnostic(status, result, '查詢', 'navigator.storage.persisted()');
+    if (check === retentionCheck) showStorageDiagnostic(status, result, false, 'navigator.storage.persisted()');
   }
 
   function requestStorageProtection() {
@@ -444,10 +645,10 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
     const button = $('request-retention');
     const status = $('retention-result');
     button.disabled = true;
-    status.textContent = '正在向瀏覽器申請持久儲存。';
+    status.textContent = t('requestingPersistence');
     void pending.then(result => {
       pendingRetentionRequest = null;
-      showStorageDiagnostic(status, result, '申請', 'navigator.storage.persist()');
+      showStorageDiagnostic(status, result, true, 'navigator.storage.persist()');
       button.disabled = false;
       if (!$('storage').hidden) void checkStorageProtection();
     });
@@ -455,8 +656,8 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
   }
 
   function size(bytes) {
-    if (bytes >= 1024 * MiB) return (bytes / (1024 * MiB)).toLocaleString('zh-Hant', { maximumFractionDigits: 2 }) + ' GiB';
-    if (bytes >= MiB) return (bytes / MiB).toLocaleString('zh-Hant', { maximumFractionDigits: 1 }) + ' MiB';
+    if (bytes >= 1024 * MiB) return (bytes / (1024 * MiB)).toLocaleString(locale, { maximumFractionDigits: 2 }) + ' GiB';
+    if (bytes >= MiB) return (bytes / MiB).toLocaleString(locale, { maximumFractionDigits: 1 }) + ' MiB';
     if (bytes >= 1024) return Math.ceil(bytes / 1024) + ' KiB';
     return bytes + ' B';
   }
@@ -501,11 +702,13 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
   }
 
   function countText(chapter) {
-    return chapter.total ? '已存 ' + chapter.count + ' / ' + chapter.total + ' 頁' : '已存 ' + chapter.count + ' 頁 · 總頁數未知';
+    return t(chapter.total ? 'savedKnownTotal' : 'savedUnknownTotal', {count: chapter.count, total: chapter.total});
   }
 
-  function favoriteButton(key, enabled, name) {
-    const label = (enabled ? '已收藏' : '收藏') + name;
+  function favoriteButton(key, enabled) {
+    const label = key.length === 3
+      ? t(enabled ? 'favoritedChapter' : 'favoriteChapter')
+      : t(enabled ? 'favoritedWork' : 'favoriteWork');
     const button = el('button', label, 'favorite');
     button.type = 'button';
     button.id = 'kg-favorite-' + key.map(encodeURIComponent).join('/');
@@ -531,15 +734,15 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
         await setFavorite(key, !enabled);
         announce({ kind: 'favorite' });
         if (location.hash !== route) return;
-        const notice = notify(enabled ? '已取消收藏。' : '已收藏。', 'success');
+        const notice = notify(enabled ? t('removedFavorite') : t('addedFavorite'), 'success');
         if (retention) {
           const detail = el('span', '', 'notice-detail');
           notice.append(detail);
           void retention.then(result => {
             if (result.state === 'granted') return;
-            const link = el('a', '查看儲存診斷');
+            const link = el('a', t('storageDiagnostics'));
             link.href = routePrefix + 'storage';
-            detail.append(storageProtectionMessage(result, '申請'), ' ', link);
+            detail.append(storageProtectionMessage(result, true), ' ', link);
           });
         }
       } catch (error) {
@@ -570,15 +773,16 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
       const article = el('article', null, 'work');
       const head = el('div', null, 'work-head');
       const names = el('div');
-      names.append(el('h2', recent.workKnown ? recent.workTitle : '尚未歸入作品'),
-        el('span', recent.key[0] + ' · ' + group.chapters.length + ' 話', 'source'));
+      const count = group.chapters.length;
+      names.append(el('h2', recent.workKnown ? recent.workTitle : t('ungrouped')),
+        el('span', recent.key[0] + ' · ' + t(count === 1 ? 'chapterCountOne' : 'chapterCount', {count}), 'source'));
       head.append(names);
-      if (recent.workKnown) head.append(favoriteButton(workKey, workStar, '作品'));
+      if (recent.workKnown) head.append(favoriteButton(workKey, workStar));
       article.append(head);
       for (const chapter of group.chapters.sort(chaptersInOrder)) {
         const row = el('div', null, 'chapter-row');
         const link = shelfChapterLink(chapter);
-        const bookmark = favoriteButton(chapter.key, chapter.favorite, '單話');
+        const bookmark = favoriteButton(chapter.key, chapter.favorite);
         link.id = 'title-' + bookmark.id;
         bookmark.setAttribute('aria-describedby', link.id);
         row.append(link, el('span', countText(chapter), 'count'), bookmark);
@@ -588,9 +792,9 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
     }
     if (!groups.size) {
       const empty = el('div', null, 'empty');
-      empty.append(el('h2', starred ? '還沒有收藏' : '書架上還沒有漫畫'),
-        el('p', starred ? '在全部作品中收藏作品或單話，即可在這裡找到。' :
-          '安裝 KomaGlide 腳本後，到支援的漫畫頁閱讀。已儲存的頁面會自動出現在這裡。'));
+      empty.append(el('h2', starred ? t('noFavorites') : t('noComics')),
+        el('p', starred ? t('favoritesHint') :
+          t('emptyShelfHint')));
       frag.append(empty);
     }
     const books = $('books');
@@ -625,17 +829,17 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
         const index = Number(slot.dataset.index);
         const blob = await readerBlob(key, index);
         if (pending.get(slot) !== token) return;
-        if (!blob) throw new Error('此頁已從書庫移除。');
+        if (!blob) throw new Error(t('pageRemoved'));
         const img = el('img');
         const url = URL.createObjectURL(blob);
         urls.set(slot, url);
         img.dataset.index = String(index);
-        img.alt = '第 ' + index + ' 頁';
+        img.alt = t('pageNumber', {page: index});
         img.onload = () => {
           if (img.naturalWidth && img.naturalHeight) slot.style.aspectRatio = img.naturalWidth + ' / ' + img.naturalHeight;
         };
         img.onerror = () => {
-          if (pending.get(slot) === token) slot.replaceChildren(el('p', '第 ' + index + ' 頁的圖片無法解碼。', 'gap'));
+          if (pending.get(slot) === token) slot.replaceChildren(el('p', t('decodeFailed', {page: index}), 'gap'));
         };
         img.src = url;
         slot.replaceChildren(img);
@@ -652,7 +856,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
     function gap(first, last) {
       if (first > last) return;
       const range = first === last ? String(first) : first + '–' + last;
-      const missing = el('p', '第 ' + range + ' 頁尚未儲存', 'gap');
+      const missing = el('p', t('missingPages', {range}), 'gap');
       missing.dataset.first = first;
       missing.dataset.last = last;
       list.append(missing);
@@ -662,7 +866,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
       figure.dataset.first = index;
       const slot = el('div', null, 'page-slot');
       slot.dataset.index = String(index);
-      figure.append(el('figcaption', '第 ' + index + ' 頁'), slot);
+      figure.append(el('figcaption', t('pageNumber', {page: index})), slot);
       list.append(figure);
       observer.observe(slot);
     }
@@ -760,8 +964,8 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
       c.key[0] === chapter.key[0] && c.key[1] === chapter.key[1]).sort(chaptersInOrder);
     const i = related.findIndex(c => c.key[2] === chapter.key[2]);
     const links = [];
-    if (i > 0) links.push(chapterLink(related[i - 1], '上一話 · ' + related[i - 1].chapterTitle));
-    if (i >= 0 && related[i + 1]) links.push(chapterLink(related[i + 1], '下一話 · ' + related[i + 1].chapterTitle));
+    if (i > 0) links.push(chapterLink(related[i - 1], t('previousChapter') + ' · ' + related[i - 1].chapterTitle));
+    if (i >= 0 && related[i + 1]) links.push(chapterLink(related[i + 1], t('nextChapter') + ' · ' + related[i + 1].chapterTitle));
     return links;
   }
 
@@ -782,16 +986,16 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
     $('storage').hidden = !storage;
     themePicker.parentElement.hidden = reading;
     if (reading && reset) {
-      $('chapter-head').replaceChildren(el('h1', '載入這一話中'));
+      $('chapter-head').replaceChildren(el('h1', t('loadingChapter')));
       $('reader-end').replaceChildren();
     }
     try {
       if (reading) {
         const key = hash.slice(5).split('/').map(decodeURIComponent);
-        if (key.length !== 3) throw new Error('這個閱讀網址不完整，請返回書庫重新選話。');
+        if (key.length !== 3) throw new Error(t('invalidChapterUrl'));
         const result = await readChapter(key);
         if (version !== token) return;
-        if (!result) throw new Error('書庫裡找不到這一話，請返回書庫選擇其他話。');
+        if (!result) throw new Error(t('chapterNotFound'));
         const { chapter, indices } = result;
         const data = await shelf();
         if (version !== token) return;
@@ -811,9 +1015,9 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
       const data = await shelf();
       if (version !== token) return;
       const { used, limit } = data.state;
-      document.title = (storage ? '容量設定' : '書庫') + ' · KomaGlide';
+      document.title = (storage ? t('storageSettings') : t('library')) + ' · KomaGlide';
       if (storage) {
-        $('storage-summary').textContent = '已使用 ' + size(used) + '，目前上限 ' + size(limit) + '。';
+        $('storage-summary').textContent = t('storageUsage', {used: size(used), limit: size(limit)});
         if (reset) $('limit').value = String(limit / MiB);
         if (reset) void checkStorageProtection();
       } else {
@@ -829,7 +1033,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
         if (reading) {
           disposePages();
           activeKey = undefined;
-          $('chapter-head').replaceChildren(el('h1', '無法開啟這一話'));
+          $('chapter-head').replaceChildren(el('h1', t('chapterOpenFailed')));
           $('reader-end').replaceChildren();
         }
         notify(messageFor(error));
@@ -845,7 +1049,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
     try {
       await setLimit(Number($('limit').value) * MiB);
       announce({ kind: 'limit' });
-      notify('已更新書庫容量上限。');
+      notify(t('storageLimitSaved'));
     } catch (error) {
       notify(messageFor(error));
     } finally {
@@ -862,8 +1066,8 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
       // Avoid losing the reading position when background transfers arrive.
       if (activeKey && detail.kind === 'saved' && activeKey[0] === detail.site &&
           activeKey[1] === detail.workId && activeKey[2] === detail.chapterId) {
-        notify('這一話有新儲存的頁面。');
-        const refresh = el('button', '更新頁面');
+        notify(t('newPagesSaved'));
+        const refresh = el('button', t('refreshPages'));
         refresh.onclick = () => { notify(); render(); };
         $('notice').append(' ', refresh);
       }
@@ -911,14 +1115,17 @@ function mountShelf(routePrefix, { announce, changes, messageFor }) {
     // This explicitly opened tab uses the comic site's storage origin. Its UI is bundled.
     // The chapter document has finished parsing. Drop its event handlers and
     // install the bundled DOM before mounting controls or observing page slots.
-    const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#f7f6f2\">\n  <meta name=\"referrer\" content=\"no-referrer\">\n  <link rel=\"icon\" href=\"data:,\">\n  <title>本站書庫 · KomaGlide</title>\n<style>:root {\n  color-scheme: light;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n  line-height: 1.6;\n  color: var(--ink);\n  background: var(--paper);\n  --ink: #222520;\n  --muted: #586158;\n  --line: #d4d7cd;\n  --accent: #305c46;\n  --paper: #f7f6f2;\n  --panel: #e9ede2;\n  --slot: #edeee7;\n  --field: #fff;\n  --field-border: #9ca79b;\n  --hover: #e3e9df;\n  --active: #d3ded0;\n  --favorite-ink: #23492d;\n  --favorite-fill: #e3ecd7;\n  --favorite-border: #72866a;\n  --on-accent: #fff;\n  --accent-hover: #244432;\n}\n:root[data-reader-theme=\"dark\"] {\n  color-scheme: dark;\n  --ink: #e8ebe5;\n  --muted: #b2baaf;\n  --line: #434c43;\n  --accent: #b3dbbc;\n  --paper: #161a17;\n  --panel: #202721;\n  --slot: #202520;\n  --field: #29302a;\n  --field-border: #798779;\n  --hover: #344238;\n  --active: #415146;\n  --favorite-ink: #c3dfbe;\n  --favorite-fill: #2d3d30;\n  --favorite-border: #798e78;\n  --on-accent: #192d20;\n  --accent-hover: #c5e5cd;\n}\n:root[data-reader-theme=\"dark\"] :focus-visible {\n  outline-color: #a4c790;\n}\n:root[data-reader-theme=\"dark\"] ::selection {\n  background: #416049;\n  color: #f2f5f0;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; }\n[hidden] { display: none !important; }\nbutton, input { font: inherit; }\na { color: inherit; text-underline-offset: .24em; }\na:hover { color: var(--accent); }\nbutton { cursor: pointer; }\nbutton:disabled { opacity: .55; cursor: wait; }\n:focus-visible { outline: 3px solid #6a8552; outline-offset: 3px; }\n::selection { background: #d6e5c4; }\n.masthead { border-bottom: 1px solid var(--line); }\n.topline, main { width: min(100% - 3rem, 64rem); margin-inline: auto; }\n.topline { min-height: 3.35rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }\n.masthead-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .25rem .75rem; padding-block: .5rem; }\n.brand { font-family: \"DM Sans\", sans-serif; font-size: 1.2rem; font-weight: 750; letter-spacing: -.035em; text-decoration: none; }\n#offline-state, .source, .count, #usage, .hint, figcaption, .back { color: var(--muted); font-size: .88rem; }\n#offline-state { font-size: .75rem; overflow-wrap: anywhere; }\nmain { padding-block: 3rem 5rem; }\nh1, h2, p, figure { margin: 0; }\nh1, h2 { overflow-wrap: anywhere; line-height: 1.35; }\nh1 { font-size: 2.5rem; letter-spacing: -.025em; }\nh2 { font-size: 1.26rem; }\n.title-row, .work-head, .shelf-tools { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }\n.title-row { margin-bottom: 1.1rem; }\n.title-row h1 { min-width: 0; font-size: clamp(1.8125rem, 3vw, 2.25rem); letter-spacing: .015em; }\n.nav-action, button { border: 1px solid var(--field-border); border-radius: .35rem; background: transparent; padding: .38rem .75rem; color: var(--ink); text-decoration: none; white-space: nowrap; }\n.nav-action { color: var(--muted); font-size: .8125rem; padding: .32rem .56rem; border-color: var(--line); }\n.nav-action:hover, button:enabled:hover { background: var(--hover); }\n.nav-action:active, button:enabled:active { background: var(--active); }\n.shelf-tools { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: .25rem 1rem; }\n.shelf-tools nav { display: flex; gap: 1.3rem; }\n.shelf-tools a { display: flex; align-items: center; min-height: 2.25rem; padding-bottom: .375rem; font-size: .875rem; color: var(--muted); text-decoration: none; }\n.shelf-tools a[aria-current] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); font-weight: 700; }\n#usage, .count, figcaption { font-variant-numeric: tabular-nums; }\n#usage, .work .source, .chapter-row .count { font-size: .75rem; }\n.work { padding-top: clamp(1.5rem, 3vw, 2rem); }\n.work-head { margin-bottom: .875rem; }\n.work-head > div { min-width: 0; }\n.work-head h2 {\n  font: 700 clamp(1.9375rem, 3vw, 2.375rem)/1.35 \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  letter-spacing: .025em;\n}\n.source { overflow-wrap: anywhere; }\n.chapter-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto 44px;\n  align-items: center;\n  column-gap: 1rem;\n  border-top: 1px solid var(--line);\n  padding-block: .75rem;\n}\n.chapter-row:last-child { border-bottom: 1px solid var(--line); }\n.chapter-link { font-weight: 570; overflow-wrap: anywhere; }\n.chapter-row .chapter-link { display: block; min-width: 0; font-size: 1.125rem; line-height: 1.48; font-weight: 650; letter-spacing: .015em; text-decoration: none; }\n.chapter-row .chapter-link:is(:hover, :focus-visible) { color: var(--accent); text-decoration: underline; }\n.chapter-heading { display: flex; align-items: baseline; gap: .625rem; }\n.chapter-heading > span { min-width: 0; }\n.chapter-ordinal { flex: none; max-width: 42%; font-size: .8125rem; font-weight: 500; letter-spacing: normal; color: var(--muted); }\n.chapter-separator { font-size: 0; }\n.chapter-subtitle { display: block; color: var(--muted); font-size: .88rem; font-weight: normal; overflow-wrap: anywhere; }\n.favorite { color: var(--muted); font-size: .75rem; padding: .32rem .56rem; border-color: var(--line); }\n.favorite[aria-pressed=\"true\"] { color: var(--favorite-ink); border-color: var(--favorite-border); background: var(--favorite-fill); }\n.chapter-row .favorite { display: grid; place-items: center; justify-self: end; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }\n.chapter-row .favorite[aria-pressed=\"true\"] { color: var(--accent); }\n.chapter-row .favorite:hover { background: var(--hover); }\n.chapter-row .favorite:active { background: var(--active); }\n.favorite[aria-disabled=\"true\"] { opacity: .55; cursor: wait; }\n.chapter-row .favorite svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; fill: none; }\n.chapter-row .favorite[aria-pressed=\"true\"] svg { fill: currentColor; }\n.empty { padding: 4.5rem 0; }\n.empty p, .hint { margin-top: .7rem; color: var(--muted); max-width: 39rem; }\n#notice { margin-bottom: 1.25rem; padding: .7rem 1rem; background: var(--notice-surface, #f2e9cf); color: var(--notice-ink, #574722); border-radius: .3rem; overflow-wrap: anywhere; }\n#notice[data-tone=\"success\"] { background: var(--favorite-fill); color: var(--favorite-ink); font-weight: 650; }\n.notice-detail { display: block; margin-top: .25rem; font-weight: 400; }\n.notice-detail:empty { display: none; }\n.notice-detail a { display: inline-block; }\n.storage-retention { margin-top: 1.75rem; overflow-wrap: anywhere; }\n#request-retention { margin-top: .75rem; min-height: 44px; }\n.back { display: inline-block; margin-bottom: 1.25rem; }\n#storage h1 { margin-bottom: 1rem; }\nform { margin: 1.75rem 0 0; }\nlabel { display: block; font-weight: 650; }\n.field { display: flex; gap: .65rem; margin-top: .5rem; }\ninput { min-width: 0; width: 9rem; padding: .4rem .6rem; border: 1px solid var(--field-border); border-radius: .35rem; background: var(--field); color: var(--ink); }\n.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }\n.primary:enabled:is(:hover, :active) { background: var(--accent-hover); }\n#reader { max-width: 48rem; margin-inline: auto; }\n#chapter-head p { margin-top: .35rem; }\n.reading-chapter #chapter-head h1 { font-size: 1.12rem; }\n.reading-chapter #chapter-head p { color: var(--muted); font-size: .85rem; }\n.reading-chapter #reader-return { margin: 0; }\n#reader-end { display: grid; gap: .6rem; }\n#reader-end:empty { display: none; }\n#reader-tools { height: 0; }\n.reading-chapter .masthead { display: none; }\n.reading-chapter main { width: 100%; padding: 0; }\n.reading-chapter #notice {\n  position: fixed;\n  z-index: 1;\n  inset: auto 0 .75rem;\n  margin: auto;\n  width: max-content;\n  max-width: calc(100% - 2rem);\n  max-height: 35dvh;\n  overflow: auto;\n}\n#pages figcaption {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip-path: inset(50%);\n  white-space: nowrap;\n}\n#reader[data-mode=\"scroll\"] #pages > * + * { margin-top: .25rem; }\n.page-slot { background: var(--slot); aspect-ratio: 2 / 3; width: 100%; }\n.page-slot img { display: block; width: 100%; height: auto; }\n.gap { padding: 1rem; text-align: center; background: var(--slot); color: var(--muted); }\n.theme-picker, .kg-reader-controls label {\n  display: flex;\n  align-items: center;\n  gap: .5rem;\n  font-size: .85rem;\n  font-weight: 500;\n  color: var(--muted);\n}\n.kg-reader-controls select, .theme-picker select {\n  border: 1px solid var(--field-border);\n  border-radius: .35rem;\n  color: var(--ink);\n  background: var(--field);\n  font: inherit;\n  font-size: .88rem;\n  padding: .3rem .55rem;\n  min-height: 2.1rem;\n}\n.kg-reader-controls select:hover, .theme-picker select:hover { background: var(--hover); }\n.theme-picker { flex: none; gap: .3125rem; font-size: .75rem; }\n.theme-picker select { min-height: 1.875rem; padding: .125rem .25rem; font-size: .75rem; border-color: var(--line); background: transparent; }\n.kg-reader-controls button:disabled { cursor: default; }\n.paged-reader #reader { max-width: none; }\n.paged-reader #pages {\n  display: flex;\n  justify-content: center;\n  width: 100%;\n  height: 100dvh;\n  gap: 2px;\n}\n.paged-reader #pages > * {\n  flex: 1 1 0;\n  min-width: 0;\n  direction: ltr;\n}\n.paged-reader .page-slot {\n  height: 100%;\n  background: transparent;\n}\n.paged-reader .page-slot img {\n  height: 100%;\n  object-fit: contain;\n}\n#pages[dir=\"rtl\"] { --first-spine: left; --second-spine: right; }\n#pages[dir=\"ltr\"] { --first-spine: right; --second-spine: left; }\n#reader[data-mode=\"double\"] figure:first-child:not(:only-child) img { object-position: var(--first-spine) center; }\n#reader[data-mode=\"double\"] figure:nth-child(2) img { object-position: var(--second-spine) center; }\n.paged-reader #pages > .gap { display: grid; place-items: center; }\n:root[data-reader-theme=\"dark\"] #notice { --notice-surface: #423b28; --notice-ink: #f0e2bc; }\n@media (max-width: 38rem) {\n  .topline, main { width: calc(100% - 2.5rem); }\n  main { padding-top: 1.6875rem; }\n  h1 { font-size: 1.95rem; }\n  .chapter-row { grid-template-columns: minmax(0, 1fr) 44px; column-gap: .375rem; padding-block: .8125rem .75rem; }\n  .chapter-row .count { grid-column: 1; margin-top: .125rem; }\n  .chapter-row .favorite { grid-column: 2; grid-row: 1 / 3; }\n}\n@media (max-width: 22rem) {\n  .work-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .375rem .5rem; }\n  .work-head > div { display: contents; }\n  .work-head h2, .work-head > :only-child .source { grid-column: 1 / -1; }\n  .work-head .favorite { grid-column: 2; }\n}\n\n.kg-reader-controls input[type=\"checkbox\"] {\n  width: 1rem;\n  height: 1rem;\n  margin: 0;\n  padding: 0;\n  accent-color: var(--accent);\n}\n.kg-page-turns[data-direction=\"rtl\"] { flex-direction: row-reverse; }\n\ndialog.kg-thumb-picker {\n  position: fixed;\n  inset: 0;\n  margin: auto;\n  box-sizing: border-box;\n  width: 94vw;\n  height: 92dvh;\n  max-width: 100%;\n  max-height: 100dvh;\n  padding: 0;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--paper);\n  color: var(--ink);\n  font: inherit;\n  text-align: start;\n}\ndialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }\n.kg-thumb-picker::backdrop { background: rgb(9 14 10 / 68%); }\n.kg-thumb-head, .kg-thumb-footer {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: .75rem;\n  padding: .75rem 1rem;\n}\n.kg-thumb-head { flex-wrap: wrap; border-bottom: 1px solid var(--line); }\n.kg-thumb-head strong { font-size: 1.1rem; margin: 0; }\n.kg-thumb-range {\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n}\n.kg-thumb-head .kg-thumb-size {\n  display: inline-flex;\n  align-items: center;\n  gap: .4rem;\n  margin-inline-start: auto;\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  white-space: nowrap;\n}\n.kg-thumb-size select { min-height: 2.1rem; }\n.kg-thumb-footer { justify-content: space-between; border-top: 1px solid var(--line); }\n.kg-thumb-grid {\n  --tile-min: 6rem;\n  display: grid;\n  flex: 1 1 0;\n  min-height: 0;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile-min)), 1fr));\n  grid-auto-rows: max-content;\n  align-content: start;\n  gap: .75rem;\n  padding: 1rem;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scroll-padding: 1rem;\n}\n.kg-thumb-grid[data-size=\"small\"] { --tile-min: 4rem; }\n.kg-thumb-grid[data-size=\"large\"] { --tile-min: clamp(15rem, 24vw, 26rem); }\n.kg-thumb-grid .kg-thumb-page {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: .22rem;\n  min-width: 0;\n  padding: .25rem;\n  border: 1px solid transparent;\n  border-radius: .35rem;\n  background: transparent;\n  color: var(--ink);\n  font: inherit;\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n  white-space: normal;\n  cursor: pointer;\n}\n.kg-thumb-grid .kg-thumb-page:hover { background: var(--hover); }\n.kg-thumb-grid .kg-thumb-page[aria-current=\"page\"] {\n  border-color: var(--accent);\n  color: var(--accent);\n  font-weight: 700;\n}\n.kg-thumb-frame {\n  display: grid;\n  place-items: center;\n  width: 100%;\n  flex: none;\n  aspect-ratio: 3 / 4;\n  overflow: hidden;\n  background: var(--slot, var(--well));\n  color: var(--muted, var(--ink));\n  font-size: .8rem;\n}\n.kg-thumb-frame img {\n  display: block;\n  width: 100%;\n  height: 100%;\n  min-height: 0;\n  object-fit: contain;\n}\n@media (max-width: 38rem) {\n  dialog.kg-thumb-picker { width: calc(100vw - .5rem); height: calc(100dvh - 1rem); }\n  .kg-thumb-head { gap: .4rem .6rem; padding: .6rem; }\n  .kg-thumb-grid { --tile-min: 4.8rem; gap: .5rem; padding: .65rem; }\n  .kg-thumb-grid[data-size=\"small\"] { --tile-min: 3.3rem; }\n  .kg-thumb-grid[data-size=\"large\"] { --tile-min: 12rem; }\n}\n.kg-reader-controls {\n  --edge-width: 2.5rem;\n  --edge-surface: var(--paper);\n  display: contents;\n}\n.kg-edge, .kg-edge-panel {\n  display: flex;\n  align-items: center;\n}\n.kg-edge {\n  position: fixed;\n  top: 50%;\n  transform: translateY(-50%);\n  z-index: 8;\n  pointer-events: none;\n}\n.kg-edge-left { left: env(safe-area-inset-left, 0px); }\n.kg-edge-right { right: env(safe-area-inset-right, 0px); flex-direction: row-reverse; }\n.kg-reader-controls .kg-edge-toggle {\n  position: relative;\n  padding: .7rem .35rem;\n  width: var(--edge-width);\n  min-height: 3.8rem;\n  display: grid;\n  place-items: center;\n  border: 1px solid var(--line);\n  background: color-mix(in srgb, var(--edge-surface) 91%, transparent);\n  color: var(--ink);\n  font: inherit;\n  font-size: .8rem;\n  font-weight: 600;\n  letter-spacing: .1em;\n  line-height: 1;\n  writing-mode: vertical-rl;\n  text-orientation: upright;\n  pointer-events: auto;\n  cursor: pointer;\n}\n.kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }\n.kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }\n.kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded=\"true\"]) {\n  background: var(--hover);\n  color: var(--accent);\n}\n.kg-edge .kg-edge-panel {\n  position: absolute;\n  width: 15rem;\n  max-width: calc(100vw - 2 * var(--edge-width) - 1.25rem);\n  max-height: calc(100dvh - 2rem);\n  flex-direction: column;\n  align-items: stretch;\n  gap: .65rem;\n  margin: 0;\n  padding: 1rem;\n  overflow: auto;\n  overscroll-behavior: contain;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--edge-surface);\n  color: var(--ink);\n  box-shadow: 0 .3rem 1.2rem rgb(0 0 0 / 18%);\n  font-size: .9rem;\n  line-height: 1.45;\n  pointer-events: auto;\n}\n.kg-edge-panel[hidden] { display: none; }\n.kg-edge-left .kg-edge-panel { left: calc(100% + .35rem); }\n.kg-edge-right .kg-edge-panel { right: calc(100% + .35rem); }\n.kg-edge-panel h2 {\n  margin: 0 0 .2rem;\n  color: var(--ink);\n  font: inherit;\n  font-size: 1.05rem;\n  font-weight: 700;\n}\n.kg-edge-panel > label {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .6rem;\n  font-size: .875rem;\n}\n.kg-edge-panel > label:has(input) { justify-content: start; }\n.kg-edge-extras {\n  display: grid;\n  gap: .6rem;\n  min-width: 0;\n  padding-top: .75rem;\n  border-top: 1px solid var(--line);\n}\n.kg-edge-extras:not(:has(> :not([hidden]))) { display: none; }\n.kg-page-turns {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .25rem;\n}\n.kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }\n.kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }\n.kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }\n</style></head>\n<body>\n  <header class=\"masthead\">\n    <div class=\"topline\">\n      <a class=\"brand\" href=\"#shelf\" aria-label=\"KomaGlide 本站書庫首頁\">KomaGlide</a>\n      <div class=\"masthead-tools\">\n        <span id=\"offline-state\" role=\"status\"></span>\n        <label class=\"theme-picker\" for=\"library-theme\">外觀\n          <select id=\"library-theme\">\n            <option value=\"system\">跟隨系統</option>\n            <option value=\"light\">淺色</option>\n            <option value=\"dark\">深色</option>\n          </select>\n        </label>\n      </div>\n    </div>\n  </header>\n  <main>\n    <p id=\"notice\" role=\"status\" hidden></p>\n    <section id=\"shelf\">\n      <div class=\"title-row\">\n        <h1>本站書庫</h1>\n        <a class=\"nav-action\" href=\"#storage\">容量設定</a>\n      </div>\n      <div class=\"shelf-tools\">\n        <nav aria-label=\"書庫篩選\">\n          <a href=\"#shelf\" id=\"all-tab\">全部作品</a>\n          <a href=\"#favorites\" id=\"star-tab\">收藏</a>\n        </nav>\n        <span id=\"usage\"></span>\n      </div>\n      <div id=\"books\"></div>\n    </section>\n    <section id=\"storage\" hidden>\n      <a class=\"back\" href=\"#shelf\">返回書庫</a>\n      <h1>容量設定</h1>\n      <p id=\"storage-summary\"></p>\n      <form id=\"limit-form\">\n        <label for=\"limit\">書庫容量上限（MiB）</label>\n        <div class=\"field\"><input type=\"number\" id=\"limit\" required min=\"1\" step=\"1\"><button class=\"primary\" type=\"submit\">儲存上限</button></div>\n      </form>\n      <p class=\"hint\">收藏和一般快取共用容量。調低上限時，書庫會從最久沒讀、尚未收藏的一話開始，整話移除。</p>\n      <section class=\"storage-retention\" aria-labelledby=\"retention-title\">\n        <h2 id=\"retention-title\">瀏覽器儲存保護</h2>\n        <p class=\"hint\" id=\"retention\" role=\"status\"></p>\n        <p class=\"hint\">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>\n        <button id=\"request-retention\" type=\"button\">申請持久儲存</button>\n        <p class=\"hint\" id=\"retention-result\" role=\"status\"></p>\n      </section>\n    </section>\n    <section id=\"reader\" hidden>\n      <a id=\"reader-return\" class=\"back\" href=\"#shelf\">返回書庫</a>\n      <div id=\"chapter-head\"></div>\n      <div id=\"reader-tools\"></div>\n      <div id=\"pages\"></div>\n      <nav id=\"reader-end\" aria-label=\"話數導覽\"></nav>\n    </section>\n    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>\n  </main>\n</body>\n</html>\n", 'text/html');
+    const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#f7f6f2\">\n  <meta name=\"referrer\" content=\"no-referrer\">\n  <link rel=\"icon\" href=\"data:,\">\n  <title>本站書庫 · KomaGlide</title>\n<style>:root {\n  color-scheme: light;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n  line-height: 1.6;\n  color: var(--ink);\n  background: var(--paper);\n  --ink: #222520;\n  --muted: #586158;\n  --line: #d4d7cd;\n  --accent: #305c46;\n  --paper: #f7f6f2;\n  --panel: #e9ede2;\n  --slot: #edeee7;\n  --field: #fff;\n  --field-border: #9ca79b;\n  --hover: #e3e9df;\n  --active: #d3ded0;\n  --favorite-ink: #23492d;\n  --favorite-fill: #e3ecd7;\n  --favorite-border: #72866a;\n  --on-accent: #fff;\n  --accent-hover: #244432;\n}\n:root[data-reader-theme=\"dark\"] {\n  color-scheme: dark;\n  --ink: #e8ebe5;\n  --muted: #b2baaf;\n  --line: #434c43;\n  --accent: #b3dbbc;\n  --paper: #161a17;\n  --panel: #202721;\n  --slot: #202520;\n  --field: #29302a;\n  --field-border: #798779;\n  --hover: #344238;\n  --active: #415146;\n  --favorite-ink: #c3dfbe;\n  --favorite-fill: #2d3d30;\n  --favorite-border: #798e78;\n  --on-accent: #192d20;\n  --accent-hover: #c5e5cd;\n}\n:root[data-reader-theme=\"dark\"] :focus-visible {\n  outline-color: #a4c790;\n}\n:root[data-reader-theme=\"dark\"] ::selection {\n  background: #416049;\n  color: #f2f5f0;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; }\n[hidden] { display: none !important; }\nbutton, input { font: inherit; }\na { color: inherit; text-underline-offset: .24em; }\na:hover { color: var(--accent); }\nbutton { cursor: pointer; }\nbutton:disabled { opacity: .55; cursor: wait; }\n:focus-visible { outline: 3px solid #6a8552; outline-offset: 3px; }\n::selection { background: #d6e5c4; }\n.masthead { border-bottom: 1px solid var(--line); }\n.topline, main { width: min(100% - 3rem, 64rem); margin-inline: auto; }\n.topline { min-height: 3.35rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }\n.masthead-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .25rem .75rem; padding-block: .5rem; }\n.brand { font-family: \"DM Sans\", sans-serif; font-size: 1.2rem; font-weight: 750; letter-spacing: -.035em; text-decoration: none; }\n#offline-state, .source, .count, #usage, .hint, figcaption, .back { color: var(--muted); font-size: .88rem; }\n#offline-state { font-size: .75rem; overflow-wrap: anywhere; }\nmain { padding-block: 3rem 5rem; }\nh1, h2, p, figure { margin: 0; }\nh1, h2 { overflow-wrap: anywhere; line-height: 1.35; }\nh1 { font-size: 2.5rem; letter-spacing: -.025em; }\nh2 { font-size: 1.26rem; }\n.title-row, .work-head, .shelf-tools { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }\n.title-row { margin-bottom: 1.1rem; }\n.title-row h1 { min-width: 0; font-size: clamp(1.8125rem, 3vw, 2.25rem); letter-spacing: .015em; }\n.nav-action, button { border: 1px solid var(--field-border); border-radius: .35rem; background: transparent; padding: .38rem .75rem; color: var(--ink); text-decoration: none; white-space: nowrap; }\n.nav-action { color: var(--muted); font-size: .8125rem; padding: .32rem .56rem; border-color: var(--line); }\n.nav-action:hover, button:enabled:hover { background: var(--hover); }\n.nav-action:active, button:enabled:active { background: var(--active); }\n.shelf-tools { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: .25rem 1rem; }\n.shelf-tools nav { display: flex; gap: 1.3rem; }\n.shelf-tools a { display: flex; align-items: center; min-height: 2.25rem; padding-bottom: .375rem; font-size: .875rem; color: var(--muted); text-decoration: none; }\n.shelf-tools a[aria-current] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); font-weight: 700; }\n#usage, .count, figcaption { font-variant-numeric: tabular-nums; }\n#usage, .work .source, .chapter-row .count { font-size: .75rem; }\n.work { padding-top: clamp(1.5rem, 3vw, 2rem); }\n.work-head { margin-bottom: .875rem; }\n.work-head > div { min-width: 0; }\n.work-head h2 {\n  font: 700 clamp(1.9375rem, 3vw, 2.375rem)/1.35 \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  letter-spacing: .025em;\n}\n.source { overflow-wrap: anywhere; }\n.chapter-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto 44px;\n  align-items: center;\n  column-gap: 1rem;\n  border-top: 1px solid var(--line);\n  padding-block: .75rem;\n}\n.chapter-row:last-child { border-bottom: 1px solid var(--line); }\n.chapter-link { font-weight: 570; overflow-wrap: anywhere; }\n.chapter-row .chapter-link { display: block; min-width: 0; font-size: 1.125rem; line-height: 1.48; font-weight: 650; letter-spacing: .015em; text-decoration: none; }\n.chapter-row .chapter-link:is(:hover, :focus-visible) { color: var(--accent); text-decoration: underline; }\n.chapter-heading { display: flex; align-items: baseline; gap: .625rem; }\n.chapter-heading > span { min-width: 0; }\n.chapter-ordinal { flex: none; max-width: 42%; font-size: .8125rem; font-weight: 500; letter-spacing: normal; color: var(--muted); }\n.chapter-separator { font-size: 0; }\n.chapter-subtitle { display: block; color: var(--muted); font-size: .88rem; font-weight: normal; overflow-wrap: anywhere; }\n.favorite { color: var(--muted); font-size: .75rem; padding: .32rem .56rem; border-color: var(--line); }\n.favorite[aria-pressed=\"true\"] { color: var(--favorite-ink); border-color: var(--favorite-border); background: var(--favorite-fill); }\n.chapter-row .favorite { display: grid; place-items: center; justify-self: end; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }\n.chapter-row .favorite[aria-pressed=\"true\"] { color: var(--accent); }\n.chapter-row .favorite:hover { background: var(--hover); }\n.chapter-row .favorite:active { background: var(--active); }\n.favorite[aria-disabled=\"true\"] { opacity: .55; cursor: wait; }\n.chapter-row .favorite svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; fill: none; }\n.chapter-row .favorite[aria-pressed=\"true\"] svg { fill: currentColor; }\n.empty { padding: 4.5rem 0; }\n.empty p, .hint { margin-top: .7rem; color: var(--muted); max-width: 39rem; }\n#notice { margin-bottom: 1.25rem; padding: .7rem 1rem; background: var(--notice-surface, #f2e9cf); color: var(--notice-ink, #574722); border-radius: .3rem; overflow-wrap: anywhere; }\n#notice[data-tone=\"success\"] { background: var(--favorite-fill); color: var(--favorite-ink); font-weight: 650; }\n.notice-detail { display: block; margin-top: .25rem; font-weight: 400; }\n.notice-detail:empty { display: none; }\n.notice-detail a { display: inline-block; }\n.storage-retention { margin-top: 1.75rem; overflow-wrap: anywhere; }\n#request-retention { margin-top: .75rem; min-height: 44px; }\n.back { display: inline-block; margin-bottom: 1.25rem; }\n#storage h1 { margin-bottom: 1rem; }\nform { margin: 1.75rem 0 0; }\nlabel { display: block; font-weight: 650; }\n.field { display: flex; gap: .65rem; margin-top: .5rem; }\ninput { min-width: 0; width: 9rem; padding: .4rem .6rem; border: 1px solid var(--field-border); border-radius: .35rem; background: var(--field); color: var(--ink); }\n.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }\n.primary:enabled:is(:hover, :active) { background: var(--accent-hover); }\n#reader { max-width: 48rem; margin-inline: auto; }\n#chapter-head p { margin-top: .35rem; }\n.reading-chapter #chapter-head h1 { font-size: 1.12rem; }\n.reading-chapter #chapter-head p { color: var(--muted); font-size: .85rem; }\n.reading-chapter #reader-return { margin: 0; }\n#reader-end { display: grid; gap: .6rem; }\n#reader-end:empty { display: none; }\n#reader-tools { height: 0; }\n.reading-chapter .masthead { display: none; }\n.reading-chapter main { width: 100%; padding: 0; }\n.reading-chapter #notice {\n  position: fixed;\n  z-index: 1;\n  inset: auto 0 .75rem;\n  margin: auto;\n  width: max-content;\n  max-width: calc(100% - 2rem);\n  max-height: 35dvh;\n  overflow: auto;\n}\n#pages figcaption {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip-path: inset(50%);\n  white-space: nowrap;\n}\n#reader[data-mode=\"scroll\"] #pages > * + * { margin-top: .25rem; }\n.page-slot { background: var(--slot); aspect-ratio: 2 / 3; width: 100%; }\n.page-slot img { display: block; width: 100%; height: auto; }\n.gap { padding: 1rem; text-align: center; background: var(--slot); color: var(--muted); }\n.theme-picker, .kg-reader-controls label {\n  display: flex;\n  align-items: center;\n  gap: .5rem;\n  font-size: .85rem;\n  font-weight: 500;\n  color: var(--muted);\n}\n.kg-reader-controls select, .theme-picker select {\n  border: 1px solid var(--field-border);\n  border-radius: .35rem;\n  color: var(--ink);\n  background: var(--field);\n  font: inherit;\n  font-size: .88rem;\n  padding: .3rem .55rem;\n  min-height: 2.1rem;\n}\n.kg-reader-controls select:hover, .theme-picker select:hover { background: var(--hover); }\n.theme-picker { flex: none; gap: .3125rem; font-size: .75rem; }\n.theme-picker select { min-height: 1.875rem; padding: .125rem .25rem; font-size: .75rem; border-color: var(--line); background: transparent; }\n.kg-reader-controls button:disabled { cursor: default; }\n.paged-reader #reader { max-width: none; }\n.paged-reader #pages {\n  display: flex;\n  justify-content: center;\n  width: 100%;\n  height: 100dvh;\n  gap: 2px;\n}\n.paged-reader #pages > * {\n  flex: 1 1 0;\n  min-width: 0;\n  direction: ltr;\n}\n.paged-reader .page-slot {\n  height: 100%;\n  background: transparent;\n}\n.paged-reader .page-slot img {\n  height: 100%;\n  object-fit: contain;\n}\n#pages[dir=\"rtl\"] { --first-spine: left; --second-spine: right; }\n#pages[dir=\"ltr\"] { --first-spine: right; --second-spine: left; }\n#reader[data-mode=\"double\"] figure:first-child:not(:only-child) img { object-position: var(--first-spine) center; }\n#reader[data-mode=\"double\"] figure:nth-child(2) img { object-position: var(--second-spine) center; }\n.paged-reader #pages > .gap { display: grid; place-items: center; }\n:root[data-reader-theme=\"dark\"] #notice { --notice-surface: #423b28; --notice-ink: #f0e2bc; }\n@media (max-width: 38rem) {\n  .topline, main { width: calc(100% - 2.5rem); }\n  main { padding-top: 1.6875rem; }\n  h1 { font-size: 1.95rem; }\n  .chapter-row { grid-template-columns: minmax(0, 1fr) 44px; column-gap: .375rem; padding-block: .8125rem .75rem; }\n  .chapter-row .count { grid-column: 1; margin-top: .125rem; }\n  .chapter-row .favorite { grid-column: 2; grid-row: 1 / 3; }\n}\n@media (max-width: 22rem) {\n  .work-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .375rem .5rem; }\n  .work-head > div { display: contents; }\n  .work-head h2, .work-head > :only-child .source { grid-column: 1 / -1; }\n  .work-head .favorite { grid-column: 2; }\n}\n\n.kg-reader-controls input[type=\"checkbox\"] {\n  width: 1rem;\n  height: 1rem;\n  margin: 0;\n  padding: 0;\n  accent-color: var(--accent);\n}\n.kg-page-turns[data-direction=\"rtl\"] { flex-direction: row-reverse; }\n\ndialog.kg-thumb-picker {\n  position: fixed;\n  inset: 0;\n  margin: auto;\n  box-sizing: border-box;\n  width: 94vw;\n  height: 92dvh;\n  max-width: 100%;\n  max-height: 100dvh;\n  padding: 0;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--paper);\n  color: var(--ink);\n  font: inherit;\n  text-align: start;\n}\ndialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }\n.kg-thumb-picker::backdrop { background: rgb(9 14 10 / 68%); }\n.kg-thumb-head, .kg-thumb-footer {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: .75rem;\n  padding: .75rem 1rem;\n}\n.kg-thumb-head { flex-wrap: wrap; border-bottom: 1px solid var(--line); }\n.kg-thumb-head strong { font-size: 1.1rem; margin: 0; }\n.kg-thumb-range {\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n}\n.kg-thumb-head .kg-thumb-size {\n  display: inline-flex;\n  align-items: center;\n  gap: .4rem;\n  margin-inline-start: auto;\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  white-space: nowrap;\n}\n.kg-thumb-size select { min-height: 2.1rem; }\n.kg-thumb-footer { justify-content: space-between; border-top: 1px solid var(--line); }\n.kg-thumb-grid {\n  --tile-min: 6rem;\n  display: grid;\n  flex: 1 1 0;\n  min-height: 0;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile-min)), 1fr));\n  grid-auto-rows: max-content;\n  align-content: start;\n  gap: .75rem;\n  padding: 1rem;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scroll-padding: 1rem;\n}\n.kg-thumb-grid[data-size=\"small\"] { --tile-min: 4rem; }\n.kg-thumb-grid[data-size=\"large\"] { --tile-min: clamp(15rem, 24vw, 26rem); }\n.kg-thumb-grid .kg-thumb-page {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: .22rem;\n  min-width: 0;\n  padding: .25rem;\n  border: 1px solid transparent;\n  border-radius: .35rem;\n  background: transparent;\n  color: var(--ink);\n  font: inherit;\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n  white-space: normal;\n  cursor: pointer;\n}\n.kg-thumb-grid .kg-thumb-page:hover { background: var(--hover); }\n.kg-thumb-grid .kg-thumb-page[aria-current=\"page\"] {\n  border-color: var(--accent);\n  color: var(--accent);\n  font-weight: 700;\n}\n.kg-thumb-frame {\n  display: grid;\n  place-items: center;\n  width: 100%;\n  flex: none;\n  aspect-ratio: 3 / 4;\n  overflow: hidden;\n  background: var(--slot, var(--well));\n  color: var(--muted, var(--ink));\n  font-size: .8rem;\n}\n.kg-thumb-frame img {\n  display: block;\n  width: 100%;\n  height: 100%;\n  min-height: 0;\n  object-fit: contain;\n}\n@media (max-width: 38rem) {\n  dialog.kg-thumb-picker { width: calc(100vw - .5rem); height: calc(100dvh - 1rem); }\n  .kg-thumb-head { gap: .4rem .6rem; padding: .6rem; }\n  .kg-thumb-grid { --tile-min: 4.8rem; gap: .5rem; padding: .65rem; }\n  .kg-thumb-grid[data-size=\"small\"] { --tile-min: 3.3rem; }\n  .kg-thumb-grid[data-size=\"large\"] { --tile-min: 12rem; }\n}\n.kg-reader-controls {\n  --edge-width: 2.5rem;\n  --edge-surface: var(--paper);\n  display: contents;\n}\n.kg-edge, .kg-edge-panel {\n  display: flex;\n  align-items: center;\n}\n.kg-edge {\n  position: fixed;\n  top: 50%;\n  transform: translateY(-50%);\n  z-index: 8;\n  pointer-events: none;\n}\n.kg-edge-left { left: env(safe-area-inset-left, 0px); }\n.kg-edge-right { right: env(safe-area-inset-right, 0px); flex-direction: row-reverse; }\n.kg-reader-controls .kg-edge-toggle {\n  position: relative;\n  padding: .7rem .35rem;\n  width: var(--edge-width);\n  min-height: 3.8rem;\n  display: grid;\n  place-items: center;\n  border: 1px solid var(--line);\n  background: color-mix(in srgb, var(--edge-surface) 91%, transparent);\n  color: var(--ink);\n  font: inherit;\n  font-size: .8rem;\n  font-weight: 600;\n  letter-spacing: .1em;\n  line-height: 1;\n  writing-mode: vertical-rl;\n  text-orientation: upright;\n  pointer-events: auto;\n  cursor: pointer;\n}\n.kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }\n.kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }\n.kg-edge-toggle:lang(en) { text-orientation: mixed; }\n.kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded=\"true\"]) {\n  background: var(--hover);\n  color: var(--accent);\n}\n.kg-edge .kg-edge-panel {\n  position: absolute;\n  width: 15rem;\n  max-width: calc(100vw - 2 * var(--edge-width) - 1.25rem);\n  max-height: calc(100dvh - 2rem);\n  flex-direction: column;\n  align-items: stretch;\n  gap: .65rem;\n  margin: 0;\n  padding: 1rem;\n  overflow: auto;\n  overscroll-behavior: contain;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--edge-surface);\n  color: var(--ink);\n  box-shadow: 0 .3rem 1.2rem rgb(0 0 0 / 18%);\n  font-size: .9rem;\n  line-height: 1.45;\n  pointer-events: auto;\n}\n.kg-edge-panel[hidden] { display: none; }\n.kg-edge-left .kg-edge-panel { left: calc(100% + .35rem); }\n.kg-edge-right .kg-edge-panel { right: calc(100% + .35rem); }\n.kg-edge-panel h2 {\n  margin: 0 0 .2rem;\n  color: var(--ink);\n  font: inherit;\n  font-size: 1.05rem;\n  font-weight: 700;\n}\n.kg-edge-panel > label {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: .6rem;\n  font-size: .875rem;\n}\n.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }\n.kg-edge-panel > label:has(input) { justify-content: start; }\n.kg-edge-extras {\n  display: grid;\n  gap: .6rem;\n  min-width: 0;\n  padding-top: .75rem;\n  border-top: 1px solid var(--line);\n}\n.kg-edge-extras:not(:has(> :not([hidden]))) { display: none; }\n.kg-page-turns {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .25rem;\n}\n.kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }\n.kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }\n.kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }\n</style></head>\n<body>\n  <header class=\"masthead\">\n    <div class=\"topline\">\n      <a class=\"brand\" href=\"#shelf\" aria-label=\"KomaGlide 本站書庫首頁\" data-i18n-label=\"siteLibraryHome\">KomaGlide</a>\n      <div class=\"masthead-tools\">\n        <span id=\"offline-state\" role=\"status\" data-i18n=\"preparingLibrary\"></span>\n        <label class=\"theme-picker\" for=\"library-theme\"><span data-i18n=\"appearance\">外觀</span>\n          <select id=\"library-theme\">\n            <option value=\"system\" data-i18n=\"systemTheme\">跟隨系統</option>\n            <option value=\"light\" data-i18n=\"lightTheme\">淺色</option>\n            <option value=\"dark\" data-i18n=\"darkTheme\">深色</option>\n          </select>\n        </label>\n        <label class=\"theme-picker\" for=\"library-language\">\n          <span data-i18n=\"language\">語言</span>\n          <select id=\"library-language\"></select>\n        </label>\n      </div>\n    </div>\n  </header>\n  <main>\n    <p id=\"notice\" role=\"status\" hidden></p>\n    <section id=\"shelf\">\n      <div class=\"title-row\">\n        <h1 data-i18n=\"siteLibrary\">本站書庫</h1>\n        <a class=\"nav-action\" href=\"#storage\" data-i18n=\"storageSettings\">容量設定</a>\n      </div>\n      <div class=\"shelf-tools\">\n        <nav aria-label=\"書庫篩選\" data-i18n-label=\"libraryFilters\">\n          <a href=\"#shelf\" id=\"all-tab\" data-i18n=\"allWorks\">全部作品</a>\n          <a href=\"#favorites\" id=\"star-tab\" data-i18n=\"favorites\">收藏</a>\n        </nav>\n        <span id=\"usage\"></span>\n      </div>\n      <div id=\"books\"></div>\n    </section>\n    <section id=\"storage\" hidden>\n      <a class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <h1 data-i18n=\"storageSettings\">容量設定</h1>\n      <p id=\"storage-summary\"></p>\n      <form id=\"limit-form\">\n        <label for=\"limit\" data-i18n=\"storageLimit\">書庫容量上限（MiB）</label>\n        <div class=\"field\"><input type=\"number\" id=\"limit\" required min=\"1\" step=\"1\"><button class=\"primary\" type=\"submit\" data-i18n=\"saveLimit\">儲存上限</button></div>\n      </form>\n      <p class=\"hint\" data-i18n=\"limitHint\">收藏和一般快取共用容量。調低上限時，書庫會從最久沒讀、尚未收藏的一話開始，整話移除。</p>\n      <section class=\"storage-retention\" aria-labelledby=\"retention-title\">\n        <h2 id=\"retention-title\" data-i18n=\"storageProtection\">瀏覽器儲存保護</h2>\n        <p class=\"hint\" id=\"retention\" role=\"status\"></p>\n        <p class=\"hint\" data-i18n=\"storageProtectionHint\">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>\n        <button id=\"request-retention\" type=\"button\" data-i18n=\"requestPersistence\">申請持久儲存</button>\n        <p class=\"hint\" id=\"retention-result\" role=\"status\"></p>\n      </section>\n    </section>\n    <section id=\"reader\" hidden>\n      <a id=\"reader-return\" class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <div id=\"chapter-head\"></div>\n      <div id=\"reader-tools\"></div>\n      <div id=\"pages\"></div>\n      <nav id=\"reader-end\" aria-label=\"話數導覽\" data-i18n-label=\"chapterNavigation\"></nav>\n    </section>\n    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>\n  </main>\n</body>\n</html>\n", 'text/html');
     document.open();
     document.close();
     const root = document.importNode(shell.documentElement, true);
     if (document.documentElement) document.documentElement.replaceWith(root);
     else document.appendChild(root);
+    mountShelf(SHELF_HASH, {
+      ...getShelfEvents(),
+      saveLanguage: value => write(languageKey, value),
+    });
     document.getElementById('offline-state').textContent = location.host;
-    mountShelf(SHELF_HASH, getShelfEvents());
   }
 
   const notContent = 'nav,aside,footer,header,[role="navigation"],[role="banner"],[aria-hidden="true"],[hidden],.advertisement,.ads,.promo,.navigation';
@@ -1057,7 +1264,7 @@ siteAdapters.push(function detectEHentai(root, address) {
     if (batch) url.searchParams.set('p', batch);
     const parsed = await fetchDocument(url.href, signal);
     if (parsed.address.origin !== address.origin || parsed.address.pathname !== galleryUrl.pathname ||
-        !ehReadGallery(parsed.root, parsed.address, id, directory)) throw new Error('無法讀取圖庫目錄');
+        !ehReadGallery(parsed.root, parsed.address, id, directory)) throw new Error(t('galleryFailed'));
   }
   function loadBatch(batch, signal) {
     let pending = directory.batches.get(signal);
@@ -1268,7 +1475,7 @@ siteAdapters.push(function detectGeneric(root, address) {
   }
   function checkedMime(value) {
     const mime = (value || '').split(';')[0].trim().toLowerCase();
-    if (!MIME.test(mime)) throw new Error('圖檔格式不支援');
+    if (!MIME.test(mime)) throw new Error(t('unsupportedImage'));
     return mime;
   }
 
@@ -1285,7 +1492,7 @@ siteAdapters.push(function detectGeneric(root, address) {
 
   function fetchPublicImage(url, readerOrigin) {
     return new Promise((resolve, reject) => {
-      const fail = () => reject(new Error('無法讀取漫畫圖檔'));
+      const fail = () => reject(new Error(t('imageReadFailed')));
       const xhr = GM_xmlhttpRequest({url: url.href, method: 'GET', responseType: 'blob',
         anonymous: true, timeout: 30_000, redirect: 'error',
         ...(readerOrigin ? {headers: {Referer: readerOrigin + '/'}} : {}),
@@ -1293,9 +1500,9 @@ siteAdapters.push(function detectGeneric(root, address) {
         onload(response) {
           try {
             const blob = response.response;
-            if (response.status !== 200) return reject(new Error('圖站回應 HTTP ' + response.status));
+            if (response.status !== 200) return reject(new Error(t('imageHttpStatus', {status: response.status})));
             if (readerOrigin && /^cache-control:[^\r\n]*\bno-store\b/im.test(response.responseHeaders || '')) {
-              return reject(new Error('此圖片限線上閱讀'));
+              return reject(new Error(t('onlineOnly')));
             }
             if (!blob || !blob.size || blob.size > IMAGE_LIMIT) return fail();
             const mime = checkedMime(blob.type);
@@ -1328,7 +1535,7 @@ siteAdapters.push(function detectGeneric(root, address) {
       }
       throw error;
     }
-    if (!response.ok) throw new Error('讀取圖檔失敗（HTTP ' + response.status + '）');
+    if (!response.ok) throw new Error(t('imageHttpFailed', {status: response.status}));
     const mime = checkedMime(response.headers.get('content-type'));
     const stream = response.body.getReader();
     const parts = [];
@@ -1338,11 +1545,11 @@ siteAdapters.push(function detectGeneric(root, address) {
         const {done, value} = await stream.read();
         if (done) break;
         size += value.length;
-        if (size > IMAGE_LIMIT) { await stream.cancel(); throw new Error('單頁超過 32 MiB'); }
+        if (size > IMAGE_LIMIT) { await stream.cancel(); throw new Error(t('imageTooLarge')); }
         parts.push(value);
       }
     } finally { stream.releaseLock(); }
-    if (!size) throw new Error('圖檔為空');
+    if (!size) throw new Error(t('blankImage'));
     return new Blob(parts, {type: mime});
   }
 
@@ -1434,24 +1641,24 @@ const thumbnailPumps = new Set();
 function openThumbnailPicker(container, { total, current, direction, thumbnailSize, onThumbnailSize, getThumbnail, onPick, onClose }) {
   const dialog = document.createElement('dialog');
   dialog.className = 'kg-thumb-picker';
-  dialog.setAttribute('aria-label', '小圖選頁');
+  dialog.setAttribute('aria-label', t('thumbnails'));
   const header = document.createElement('div');
   header.className = 'kg-thumb-head';
   const heading = document.createElement('strong');
-  heading.textContent = '小圖選頁';
+  heading.textContent = t('thumbnails');
   const range = document.createElement('span');
   range.className = 'kg-thumb-range';
   const sizeLabel = document.createElement('label');
   sizeLabel.className = 'kg-thumb-size';
   const sizeMenu = document.createElement('select');
-  sizeMenu.setAttribute('aria-label', '縮圖大小');
-  for (const [value, text] of [['small', '小'], ['medium', '中'], ['large', '大']]) {
-    sizeMenu.add(new Option(text, value));
+  sizeMenu.setAttribute('aria-label', t('thumbnailSize'));
+  for (const value of ['small', 'medium', 'large']) {
+    sizeMenu.add(new Option(t(value), value));
   }
   sizeMenu.value = thumbnailSize;
-  sizeLabel.append('縮圖大小', sizeMenu);
-  const close = readerButton('關閉', dispose);
-  close.setAttribute('aria-label', '關閉小圖');
+  sizeLabel.append(t('thumbnailSize'), sizeMenu);
+  const close = readerButton(t('close'), dispose);
+  close.setAttribute('aria-label', t('closeThumbnails'));
   header.append(heading, range, sizeLabel, close);
   const grid = document.createElement('div');
   grid.className = 'kg-thumb-grid';
@@ -1461,8 +1668,8 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
   footer.className = 'kg-thumb-footer';
   const batch = 60;
   let start = current - ((current - 1) % batch);
-  const back = readerButton('上一組', () => show(start - batch, start - 1));
-  const more = readerButton('下一組', () => show(start + batch, start + batch));
+  const back = readerButton(t('previousBatch'), () => show(start - batch, start - 1));
+  const more = readerButton(t('nextBatch'), () => show(start + batch, start + batch));
   footer.append(back, more);
   footer.hidden = total <= batch;
   dialog.append(header, grid, footer);
@@ -1516,7 +1723,7 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
       const blob = await getThumbnail(Number(tile.dataset.page), large ? 'large' : 'medium');
       if (!entry.visible) return;
       if (!blob) {
-        if (!entry.url) frame.textContent = '無預覽';
+        if (!entry.url) frame.textContent = t('noPreview');
         return;
       }
       const img = document.createElement('img');
@@ -1532,7 +1739,7 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
       entry.large = large;
       url = null;
     } catch {
-      if (entry.visible && !entry.url) frame.textContent = '無預覽';
+      if (entry.visible && !entry.url) frame.textContent = t('noPreview');
     } finally {
       if (url) URL.revokeObjectURL(url);
     }
@@ -1580,7 +1787,9 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
     clearGrid();
     start = first;
     const last = Math.min(total, start + batch - 1);
-    range.textContent = total <= batch ? total + ' 頁' : start + '–' + last + ' / ' + total + ' 頁';
+    range.textContent = total <= batch
+      ? t(total === 1 ? 'pageCountOne' : 'pageCount', {count: total})
+      : t('pageRange', {start, end: last, total});
     back.disabled = start === 1;
     more.disabled = last === total;
     for (let page = start; page <= last; page++) {
@@ -1588,7 +1797,7 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
       tile.type = 'button';
       tile.className = 'kg-thumb-page';
       tile.dataset.page = page;
-      tile.setAttribute('aria-label', '第 ' + page + ' 頁');
+      tile.setAttribute('aria-label', t('pageNumber', {page}));
       if (page === current) tile.setAttribute('aria-current', 'page');
       const frame = document.createElement('span');
       frame.className = 'kg-thumb-frame';
@@ -1735,8 +1944,8 @@ function mountReaderControls(container, options) {
     panel.append(extras);
   }
 
-  const settings = drawer('left', '閱讀設定', '設定');
-  const navigation = drawer('right', '頁面導覽', '導覽');
+  const settings = drawer('left', t('readerSettings'), t('settings'));
+  const navigation = drawer('right', t('pageNavigation'), t('navigation'));
 
   function menu(name, choices, change) {
     const label = document.createElement('label');
@@ -1749,24 +1958,24 @@ function mountReaderControls(container, options) {
     return select;
   }
 
-  const mode = menu('閱讀模式', [['scroll', '直向捲動'], ['single', '單頁'], ['double', '雙頁']], onMode);
+  const mode = menu(t('readingMode'), [['scroll', t('verticalScroll')], ['single', t('singlePage')], ['double', t('doublePage')]], onMode);
   if (options.onBufferMode) {
-    const buffer = menu('緩衝模式', [['chapter', '停留時緩衝整話'], ['ahead', '只預載後面 3 頁']], options.onBufferMode);
+    const buffer = menu(t('bufferMode'), [['chapter', t('bufferChapter')], ['ahead', t('bufferAhead')]], options.onBufferMode);
     buffer.value = options.bufferMode;
   }
   if (options.parallelPreload) {
     const {value, choices, onChange} = options.parallelPreload;
-    const preload = menu('並行預載數', choices.map(count => [count, count + ' 頁']), onChange);
+    const preload = menu(t('parallelPreload'), choices.map(count => [count, t(count === 1 ? 'pageCountOne' : 'pageCount', {count})]), onChange);
     preload.value = String(value);
   }
-  const theme = menu('外觀', [['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']], onTheme);
-  const direction = menu('翻頁方向', [['rtl', '從右到左'], ['ltr', '從左到右']], options.onDirection);
+  const theme = menu(t('appearance'), [['system', t('systemTheme')], ['light', t('lightTheme')], ['dark', t('darkTheme')]], onTheme);
+  const direction = menu(t('pageDirection'), [['rtl', t('rtl')], ['ltr', t('ltr')]], options.onDirection);
   const tapLabel = document.createElement('label');
   const tap = document.createElement('input');
   tap.type = 'checkbox';
   tap.addEventListener('change', () => options.onTapToTurn(tap.checked), listen);
-  tapLabel.append(tap, '點按翻頁');
-  const browse = readerButton('小圖選頁', () => {
+  tapLabel.append(tap, t('tapToTurn'));
+  const browse = readerButton(t('thumbnails'), () => {
     if (picker || state.total < 1) return;
     const current = Math.max(1, Math.min(options.getCurrentPage(), state.total));
     picker = openThumbnailPicker(toolbar, { ...state, current, getThumbnail: options.getThumbnail,
@@ -1791,8 +2000,8 @@ function mountReaderControls(container, options) {
     const target = options.getCurrentPage() + step;
     if (target >= 1 && target <= state.total) options.onPick(target);
   }, listen);
-  const previous = readerButton('上一頁', () => turn(-1));
-  const next = readerButton('下一頁', () => turn(1));
+  const previous = readerButton(t('previousPage'), () => turn(-1));
+  const next = readerButton(t('nextPage'), () => turn(1));
   const count = document.createElement('span');
   count.className = 'kg-page-count';
   count.setAttribute('aria-live', 'polite');
@@ -1844,7 +2053,7 @@ function mountReaderControls(container, options) {
     direction.value = state.direction;
     tap.checked = state.tapToTurn;
     const rtl = state.direction === 'rtl';
-    tapLabel.title = rtl ? '點畫面左側前進，右側返回' : '點畫面右側前進，左側返回';
+    tapLabel.title = rtl ? t('tapRtl') : t('tapLtr');
     previous.setAttribute('aria-keyshortcuts', rtl ? 'ArrowRight PageUp' : 'ArrowLeft PageUp');
     next.setAttribute('aria-keyshortcuts', rtl ? 'ArrowLeft PageDown' : 'ArrowRight PageDown');
     setTheme?.(state.theme);
@@ -2100,6 +2309,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 }
 .kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }
 .kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }
+.kg-edge-toggle:lang(en) { text-orientation: mixed; }
 .kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded="true"]) {
   background: var(--hover);
   color: var(--accent);
@@ -2137,11 +2347,13 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 }
 .kg-edge-panel > label {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: .6rem;
   font-size: .875rem;
 }
+.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }
 .kg-edge-panel > label:has(input) { justify-content: start; }
 .kg-edge-extras {
   display: grid;
@@ -2163,6 +2375,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 
   `;
   function readerRoot(host) {
+    host.lang = locale;
     const root = host.attachShadow({mode: 'open'});
     root.append(element('style', readerCSS));
     return root;
@@ -2172,7 +2385,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     const timeout = AbortSignal.timeout(20_000);
     const response = await fetch(address, {mode:'same-origin', credentials:'same-origin',
       signal:signal ? AbortSignal.any([signal, timeout]) : timeout});
-    if (!response.ok || !/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error('下一頁沒有傳回章節網頁');
+    if (!response.ok || !/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error(t('nextPageNotHtml'));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let html = '', size = 0;
@@ -2181,7 +2394,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         const {done, value} = await reader.read();
         if (done) break;
         size += value.length;
-        if (size > 4 * 1024 * 1024) { await reader.cancel(); throw new Error('章節網頁過大'); }
+        if (size > 4 * 1024 * 1024) { await reader.cancel(); throw new Error(t('chapterHtmlTooLarge')); }
         html += decoder.decode(value, {stream:true});
       }
       html += decoder.decode();
@@ -2196,7 +2409,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
   async function fetchChapter(address) {
     const parsed = await fetchDocument(address);
     const chapter = detectChapter(parsed.root, parsed.address);
-    if (!chapter) throw new Error('無法辨識接續章節');
+    if (!chapter) throw new Error(t('nextChapterUnrecognized'));
     return chapter;
   }
 
@@ -2218,7 +2431,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       applyAuto(enabled);
     });
     settingsChanged.addEventListener('change', () => { input.checked = autoNext; }, {signal});
-    label.append(input, document.createTextNode('自動接下一話'));
+    label.append(input, document.createTextNode(t('autoContinue')));
     return label;
   }
 
@@ -2285,7 +2498,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     }, options);
     function showPageRetry(figure, message) {
       const caption = element('figcaption', message + ' ');
-      caption.append(button('重試', () => {
+      caption.append(button(t('retry'), () => {
         releaseFigure(figure);
         loadFigure(figure);
       }));
@@ -2323,13 +2536,13 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       const page = entries.get(figure);
       const source = liveChapter;
       if (page.imageUrl || !overlay || !source?.resolvePage || groups[0].figures.get(page.index) !== figure) return page;
-      const notice = showNotice && element('figcaption', '等候原站載入第 ' + page.index + ' 頁…');
+      const notice = showNotice && element('figcaption', t('waitingForPage', {page: page.index}));
       if (notice) figure.append(notice);
       try {
         const entry = await source.resolvePage(page.index, controller.signal);
         if (stopped || !liveChapter) return page;
         const resolved = entry?.index === page.index && entry.imageUrl && pageFor(source, entry);
-        if (!resolved?.imageUrl) throw new Error('原站未能載入第 ' + page.index + ' 頁。');
+        if (!resolved?.imageUrl) throw new Error(t('sitePageFailed', {page: page.index}));
         entries.set(figure, resolved);
         return resolved;
       } finally {
@@ -2363,7 +2576,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         }
         const timer = setTimeout(() => {
           checkNativeBuffer = null;
-          reject(new Error('原站載圖逾時'));
+          reject(new Error(t('siteImageTimeout')));
         }, 8000);
         checkNativeBuffer = () => {
           const page = entries.get(figure);
@@ -2381,10 +2594,9 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         if (stopped || group !== section) return;
         const failed = [...failedBuffers].some(([figure]) => section.figures.get(Number(figure.dataset.index)) === figure);
         bufferProgress.hidden = false;
-        bufferProgress.textContent = '已保存 ' + count + '／' + section.total + ' 頁' +
-          (failed ? ' · 有缺頁，見閱讀設定' : '');
+        bufferProgress.textContent = t(failed ? 'bufferProgressMissing' : 'bufferProgress', {count, total: section.total});
       } catch {
-        if (!stopped && group === section) bufferProgress.textContent = '無法讀取緩衝進度';
+        if (!stopped && group === section) bufferProgress.textContent = t('bufferProgressFailed');
       }
     }
     function scheduleBufferProgress() {
@@ -2439,7 +2651,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
             resolved = await waitForNativeBuffer(figure, stillWanted);
             if (!resolved || !stillWanted()) return true;
           }
-          if (!resolved.imageUrl) throw new Error('原站尚未提供圖檔');
+          if (!resolved.imageUrl) throw new Error(t('imageNotAvailable'));
           await saveLoaded(resolved);
         }
         bufferAttempts.set(figure, resolved);
@@ -2461,8 +2673,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       bufferError.hidden = !missing.length;
       if (missing.length) {
         const [figure, reason] = missing[0];
-        bufferError.replaceChildren('緩衝缺 ' + missing.length + ' 頁（第 ' + figure.dataset.index + ' 頁：' + reason + '） ',
-          button('重試缺頁', () => {
+        bufferError.replaceChildren(t('bufferMissing', {count: missing.length, page: figure.dataset.index, reason}) + ' ',
+          button(t('retryPages'), () => {
             for (const [page] of missing) {
               failedBuffers.delete(page);
               bufferRetries.delete(page);
@@ -2506,7 +2718,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (obsolete()) return;
       let page = entries.get(figure);
       const img = element('img');
-      img.alt = '第 ' + page.index + ' 頁';
+      img.alt = t('pageNumber', {page: page.index});
       img.dataset.index = String(page.index);
       let blob = cached.blob;
       if (!blob) {
@@ -2515,9 +2727,9 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         if (!page.imageUrl) {
           waitingForSource.add(figure);
           if (revealNativePage(figure, page.index)) {
-            showPageRetry(figure, '等候原站載入第 ' + page.index + ' 頁…');
+            showPageRetry(figure, t('waitingForPage', {page: page.index}));
           } else {
-            figure.append(element('figcaption', '第 ' + page.index + ' 頁尚未儲存，請在原站載入此頁。'));
+            figure.append(element('figcaption', t('pageNotSavedOnSite', {page: page.index})));
           }
           return;
         }
@@ -2532,7 +2744,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
           }
         } catch (err) {
           if (obsolete()) return;
-          figure.append(element('figcaption', '線上顯示 · ' + err.message));
+          figure.append(element('figcaption', t('onlineDisplay', {reason: err.message})));
           img.src = page.imageUrl;
         }
       }
@@ -2542,7 +2754,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         displayedImages.set(figure, {url:img.src, blob});
       }
       img.addEventListener('load', () => { figure.style.minHeight = ''; });
-      img.addEventListener('error', () => figure.append(element('figcaption','圖檔無法顯示')));
+      img.addEventListener('error', () => figure.append(element('figcaption',t('imageDisplayFailed'))));
       figure.prepend(img);
     }
 
@@ -2700,7 +2912,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       const atEnd = !paged || visibleEnd() === group.total;
       const loadedNext = paged && groups.indexOf(group) < groups.length - 1;
       previousGroup.hidden = !paged || groups.indexOf(group) < 1 || position > (mode === 'double' ? 2 : 1);
-      nextButton.textContent = loadedNext ? '下一話' : next?.same ? '接上下一頁' : '接上下一話';
+      nextButton.textContent = loadedNext ? t('nextChapter') : next?.same ? t('continuePage') : t('continueChapter');
       nextButton.disabled = busy;
       nextButton.hidden = !atEnd || (!loadedNext && !next);
       chapterActions.hidden = previousGroup.hidden && nextButton.hidden && !message.textContent;
@@ -2716,7 +2928,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       const next = target();
       if (!next) return;
       busy = true;
-      message.textContent = '正在接續…';
+      message.textContent = t('connecting');
       renderEnd();
       try {
         let chapter = await fetchChapter(next.url);
@@ -2763,7 +2975,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       maybeContinue();
     }, options);
     settingsChanged.addEventListener('change', maybeContinue, {signal:controller.signal});
-    const previousGroup = button('上一話', () => {
+    const previousGroup = button(t('previousChapter'), () => {
       group = groups[groups.indexOf(group) - 1];
       position = group.total;
       updateView();
@@ -2773,7 +2985,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     root.append(pane, endMarker);
     if (overlay) {
       addPages(first, false);
-      const settingsExtras = [chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal), button('關閉閱讀器', () => overlay.close())];
+      const settingsExtras = [chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal), button(t('closeReader'), () => overlay.close())];
       overlay.append(...settingsExtras, chapterActions, bufferProgress);
       getShelfEvents().changes.addEventListener('change', ({detail}) => {
         if (detail.kind === 'limit' || (detail.kind === 'saved' && detail.workId === group.chapter.workId &&
@@ -2898,15 +3110,15 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     const dock = element('div','', 'dock');
     dock.setAttribute('role', 'group');
     dock.setAttribute('aria-label', 'KomaGlide');
-    const status = button('書庫', openShelf);
+    const status = button(t('library'), openShelf);
     status.className = 'dock-shelf';
-    status.title = '開啟本站書庫';
+    status.title = t('openSiteLibrary');
     const count = element('span', '', 'dock-count');
     status.append(count);
     const errorNotice = element('p', '', 'dock-error');
     errorNotice.setAttribute('role', 'status');
     errorNotice.tabIndex = 0;
-    const open = button('直向閱讀器', openReader);
+    const open = button(t('verticalReader'), openReader);
     open.className = 'dock-reader';
     dock.append(open, status, errorNotice);
     root.append(dock);
@@ -2916,7 +3128,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     async function openReader() {
       if (dialog || !chapter) return;
       dialog = element('dialog');
-      dialog.setAttribute('aria-label','直向閱讀器');
+      dialog.setAttribute('aria-label',t('verticalReader'));
       const [view, parallelPreload] = await Promise.all([
         read(VIEW).catch(() => null),
         chapter.parallelPages ? read(PARALLEL_PRELOAD).catch(() => null) : null
@@ -2935,7 +3147,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       }, {once:true});
       overlayFlow = createFlow(dialog, chapter, dialog, {...view, parallelPreload});
     }
-    GM_registerMenuCommand('直向閱讀器', openReader);
+    GM_registerMenuCommand(t('verticalReader'), openReader);
     return {
       update(value) {
         const changed = chapter?.chapterId !== value.chapterId || chapter?.workId !== value.workId;
@@ -2990,7 +3202,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (active) return;
       const failure = [...failures.values()].find(item => isCurrentChapter(item.page));
       if (failure) {
-        show('保存暫停', failure.error);
+        show(t('savingPaused'), failure.error);
         return;
       }
       // One metadata read per burst, including writes by the reader or another tab.
@@ -2998,10 +3210,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         try {
           const count = await savedPageCount(chapterKey);
           if (revision !== statusRevision || active) return;
-          const total = chapterTotal >= count && chapterTotal > 0 ? ' / 共 ' + chapterTotal + ' 頁' : '';
-          show('已保存 ' + count + ' 頁' + total);
+          const key = chapterTotal >= count && chapterTotal > 0 ? 'savedPagesOfTotal' : 'savedPages';
+          show(t(key, {count, total: chapterTotal}));
         } catch (error) {
-          if (revision === statusRevision && !active) show('無法讀取保存頁數', error.message);
+          if (revision === statusRevision && !active) show(t('savedCountFailed'), error.message);
         }
       }, 60);
     }
@@ -3011,7 +3223,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       active = true;
       while (queue.length) {
         const {page, key} = queue.shift();
-        if (isCurrentChapter(page)) show('正在保存第 ' + page.index + ' 頁');
+        if (isCurrentChapter(page)) show(t('savingPage', {page: page.index}));
         try {
           await saveLoaded(page);
           saved.add(key);
@@ -3116,11 +3328,16 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     scan();
   }
 
-  GM_registerMenuCommand('開啟 KomaGlide 書庫', openShelf);
-  const start = location.hash.startsWith(SHELF_HASH) ? displayShelf : runSource;
+  const language = read(languageKey).catch(() => null);
+  async function start() {
+    setLocale(await language);
+    GM_registerMenuCommand(t('openKomaGlideLibrary'), openShelf);
+    if (location.hash.startsWith(SHELF_HASH)) displayShelf();
+    else runSource();
+  }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start, {once: true});
   } else {
-    start();
+    void start();
   }
 })();

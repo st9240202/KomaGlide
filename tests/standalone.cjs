@@ -174,6 +174,7 @@ async function run() {
     await openReader(page, pngs);
     assert.equal(pageCount, 2, "only the two comic tabs opened by the test may exist");
     await page.goto(unrelated);
+    await page.waitForFunction(() => window.commands.has("開啟 KomaGlide 書庫"));
     await page.evaluate(async () => {
       window.usingShelfMenu = true;
       await window.commands.get("開啟 KomaGlide 書庫")();
@@ -234,9 +235,35 @@ async function run() {
     await expectSavedPages(shelf, pngs);
     await shelf.reload();
     await expectSavedPages(shelf, pngs);
+
+    await shelf.goto(target.href);
+    assert.equal(await shelf.locator("html").getAttribute("lang"), "zh-Hant");
+    const locales = [
+      ["en", "Site Library", "Vertical Reader", "Reading Settings", "Open KomaGlide Library"],
+      ["ja", "このサイトの本棚", "縦読みリーダー", "閲覧設定", "KomaGlide の本棚を開く"],
+      ["zh-Hans", "本站书库", "纵向阅读器", "阅读设置", "打开 KomaGlide 书库"],
+    ];
+    for (const [language, library, reader, settingsLabel, menuLabel] of locales) {
+      await shelf.locator("#library-language").selectOption(language);
+      await shelf.locator('html[lang="' + language + '"]').waitFor({ state: "attached" });
+      await shelf.getByRole("heading", { name: library, exact: true }).waitFor();
+      assert.equal(await shelf.locator("#library-language").inputValue(), language);
+
+      // The same manager preference applies when a chapter is opened again.
+      await page.goto(chapter);
+      await page.waitForFunction(label => window.commands.has(label), menuLabel);
+      await page.getByRole("button", { name: reader, exact: true }).tap();
+      const dialog = page.getByRole("dialog", { name: reader, exact: true });
+      await dialog.getByRole("button", { name: settingsLabel, exact: true }).tap();
+      const panel = dialog.locator("#kg-left-panel");
+      assert.ok(await panel.evaluate(node => node.scrollWidth <= node.clientWidth));
+    }
+    await shelf.locator("#library-language").selectOption("zh-Hant");
+    await shelf.locator('html[lang="zh-Hant"]').waitFor({ state: "attached" });
+    await shelf.getByRole("heading", { name: "本站書庫", exact: true }).waitFor();
     assert.equal(pageCount, 3);
     assert.deepEqual(unexpected, [], "no automatic tabs, library requests or uncached image loads");
-    console.log(engine + ": single-tab capture, cached reread, menu bookshelf and chapter reload passed on touch layout");
+    console.log(engine + ": capture, cached reread, chapter reload and all four interface languages passed on touch layout");
   } finally {
     await context?.close();
     await rm(profile, { recursive: true, force: true });
