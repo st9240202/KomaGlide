@@ -251,14 +251,26 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
   return { close: dispose, resize };
 }
 
-function bindTapNavigation(target, enabled, navigate, listen) {
+function bindPageGestures(target, enabled, tapEnabled, navigate, listen) {
+  const interactive = 'a, button, input, select, textarea, [contenteditable="true"]';
   let press;
   target.addEventListener('pointerdown', event => {
     press = enabled() && event.isPrimary && event.button === 0
-      ? { x: event.clientX, y: event.clientY, id: event.pointerId, time: event.timeStamp } : null;
+      ? { x: event.clientX, y: event.clientY, id: event.pointerId, time: event.timeStamp,
+        swipe: event.pointerType === 'touch' && !event.target.closest(interactive), moved: false } : null;
   }, listen);
   target.addEventListener('pointermove', event => {
-    if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 12) press = null;
+    if (press?.id === event.pointerId && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 12) {
+      press.moved = true;
+    }
+  }, listen);
+  target.addEventListener('pointerup', event => {
+    if (!press?.swipe || press.id !== event.pointerId) return;
+    const dx = event.clientX - press.x;
+    const dy = event.clientY - press.y;
+    if (Math.abs(dx) < 48 || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
+    press = null; // A subsequent click must not also turn the page.
+    if (enabled() && !event.defaultPrevented) navigate(dx > 0 ? 'left' : 'right');
   }, listen);
   for (const type of ['pointercancel', 'dragstart', 'contextmenu']) {
     target.addEventListener(type, () => { press = null; }, listen);
@@ -266,11 +278,11 @@ function bindTapNavigation(target, enabled, navigate, listen) {
   target.addEventListener('click', event => {
     const down = press;
     press = null;
-    if (!down || !enabled() || event.defaultPrevented || event.button !== 0 || event.detail === 0 ||
+    if (!down || down.moved || !enabled() || !tapEnabled() || event.defaultPrevented || event.button !== 0 || event.detail === 0 ||
         (event.pointerId != null && event.pointerId !== down.id) || event.timeStamp - down.time > 650 ||
         Math.hypot(event.clientX - down.x, event.clientY - down.y) > 12 ||
         event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
-        event.target.closest('a, button, input, select, textarea, [contenteditable="true"]')) return;
+        event.target.closest(interactive)) return;
     const rect = target.getBoundingClientRect();
     const x = (event.clientX - rect.left) / rect.width;
     if (x >= 0 && x < 1 / 3) navigate('left');
@@ -396,7 +408,8 @@ export function mountReaderControls(container, options) {
     if (state.mode !== 'scroll' && target >= 1 && target <= state.total) onTurn(target);
   }
   function sideStep(side) { return (side === 'left') === (state.direction === 'rtl') ? 1 : -1; }
-  bindTapNavigation(options.tapTarget, () => state.tapToTurn && !picker && !openDrawer, side => {
+  options.tapTarget.classList.add('kg-page-gestures');
+  bindPageGestures(options.tapTarget, () => !picker && !openDrawer, () => state.tapToTurn, side => {
     const step = sideStep(side);
     if (state.mode !== 'scroll') { turn(step); return; }
     const target = options.getCurrentPage() + step;
@@ -473,6 +486,7 @@ export function mountReaderControls(container, options) {
   return { update, destroy() {
     picker?.close();
     lifetime.abort();
+    options.tapTarget.classList.remove('kg-page-gestures');
     for (const restore of restoreExtras) restore();
     if (themeTarget) delete themeTarget.dataset.readerTheme;
     toolbar.remove();

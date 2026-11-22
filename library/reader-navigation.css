@@ -1,3 +1,5 @@
+.kg-page-gestures { touch-action: pan-y pinch-zoom; }
+
 .kg-reader-controls input[type="checkbox"] {
   width: 1rem;
   height: 1rem;

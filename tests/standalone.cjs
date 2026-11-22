@@ -57,6 +57,51 @@ async function expectTouchTarget(button) {
   assert(box && box.width >= 44 && box.height >= 44, "touch target must be at least 44 × 44 CSS pixels");
 }
 
+async function expectSwipeTurns(page, reader, direction) {
+  const settings = reader.getByRole("button", { name: "閱讀設定", exact: true });
+  const mode = reader.getByRole("combobox", { name: "閱讀模式" });
+  const readingDirection = reader.getByRole("combobox", { name: "翻頁方向" });
+  const tapToTurn = reader.getByRole("checkbox", { name: "點按翻頁" });
+  await settings.tap();
+  await mode.selectOption("single");
+  await readingDirection.selectOption(direction);
+  await tapToTurn.uncheck();
+  await settings.tap();
+
+  const session = await page.context().newCDPSession(page);
+  async function swipe(x, y, dx, dy) {
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    for (const fraction of [0.25, 0.5, 0.75, 1]) {
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove", touchPoints: [{ x: x + dx * fraction, y: y + dy * fraction }],
+      });
+    }
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  }
+  const image = index => reader.locator('img[data-index="' + index + '"]');
+  const forward = direction === "rtl" ? 1 : -1;
+  try {
+    await image(1).waitFor();
+    await swipe(190, 240, 16 * forward, 0);
+    await swipe(190, 240, 0, 140);
+    assert.equal(await image(2).isVisible(), false, "short and vertical gestures should keep page one");
+    await swipe(190 - 100 * forward, 240, 190 * forward, 0);
+    await image(2).waitFor();
+    await swipe(190 - 100 * forward, 240, 190 * forward, 0);
+    assert.equal(await image(2).isVisible(), true, "swipe stops at the chapter boundary");
+    await swipe(190 + 100 * forward, 240, -190 * forward, 0);
+    await image(1).waitFor();
+  } finally {
+    await session.detach();
+  }
+
+  await settings.tap();
+  await mode.selectOption("scroll");
+  await readingDirection.selectOption("rtl");
+  await tapToTurn.check();
+  await settings.tap();
+}
+
 async function expectDockInsideVisualViewport(page) {
   const originalSize = page.viewportSize();
   try {
@@ -164,6 +209,9 @@ async function run() {
     await expectTouchTarget(page.getByRole("button", { name: "直向閱讀器", exact: true }));
     await expectDockInsideVisualViewport(page);
     await openReader(page, pngs);
+    if (engine === "chromium") {
+      await expectSwipeTurns(page, page.getByRole("dialog", { name: "直向閱讀器", exact: true }), "rtl");
+    }
     await page.close();
 
     // First load the chapter document again. Its image hints remain available
@@ -235,6 +283,7 @@ async function run() {
     await expectSavedPages(shelf, pngs);
     await shelf.reload();
     await expectSavedPages(shelf, pngs);
+    if (engine === "chromium") await expectSwipeTurns(shelf, shelf.locator("#reader"), "ltr");
 
     await shelf.goto(target.href);
     assert.equal(await shelf.locator("html").getAttribute("lang"), "zh-Hant");
