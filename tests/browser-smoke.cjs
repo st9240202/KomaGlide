@@ -277,14 +277,14 @@ async function pickThumbnail(page, surface, index, rgb) {
   await picker.waitFor({ state: "hidden" });
 }
 
-async function tapReader(page, surface, xFraction, touch = false) {
+async function tapReader(page, surface, xFraction, touch = false, yFraction = .5) {
   const pane = surface.locator("main.pages");
-  const { x, y } = await pane.evaluate((el, fraction) => {
+  const { x, y } = await pane.evaluate((el, { xFraction, yFraction }) => {
     const box = el.getBoundingClientRect();
     const top = Math.max(0, box.top);
-    return { x: Math.round(box.x + box.width * fraction),
-      y: Math.round((top + Math.min(box.bottom, window.innerHeight)) / 2) };
-  }, xFraction);
+    return { x: Math.round(box.x + box.width * xFraction),
+      y: Math.round(top + (Math.min(box.bottom, window.innerHeight) - top) * yFraction) };
+  }, { xFraction, yFraction });
   if (touch) await page.touchscreen.tap(x, y);
   else await page.mouse.click(x, y);
 }
@@ -294,7 +294,7 @@ async function checkEdgeLayout(page, surface) {
   const settings = surface.getByRole("button", { name: settingsMenu, exact: true });
   const nav = surface.getByRole("button", { name: navigationMenu, exact: true });
   const canvas = surface.locator("main.pages");
-  for (const size of [original, { width: 390, height: 740 }]) {
+  for (const size of [original, { width: 390, height: 740 }, { width: 740, height: 390 }]) {
     await page.setViewportSize(size);
     await setDrawer(surface, settingsMenu, false);
     await setDrawer(surface, navigationMenu, false);
@@ -324,6 +324,17 @@ async function checkEdgeLayout(page, surface) {
     await tapReader(page, surface, .24, true);
     assert.equal(await nav.getAttribute("aria-expanded"), "false");
     assert.equal(await surface.locator(".kg-page-count").textContent(), before, "dismissing the panel turned a page");
+    await setDrawer(surface, navigationMenu);
+    await tapReader(page, surface, .5, true, .1);
+    assert.equal(await nav.getAttribute("aria-expanded"), "false");
+    assert.equal(await nav.isVisible(), true, "the first center tap should only close the drawer");
+    await tapReader(page, surface, .5, true);
+    assert.equal(await settings.isVisible(), false);
+    assert.equal(await nav.isVisible(), false);
+    assert.deepEqual(await canvas.boundingBox(), bounds, "hiding the buttons moved the comic");
+    await tapReader(page, surface, .5, true);
+    assert.equal(await settings.isVisible(), true);
+    assert.equal(await nav.isVisible(), true);
   }
   await page.setViewportSize(original);
 }
@@ -385,16 +396,22 @@ async function testPagedReader(page, surface) {
   assert.equal(await tap.isChecked(), true);
   await closeMenus();
   await tapReader(page, surface, 0.5);
+  assert.equal(await settingsToggle.isVisible(), false);
+  assert.equal(await navToggle.isVisible(), false);
   assert.equal(await surface.locator(".kg-page-count").textContent(), "1 / 3", "center tap should leave the page in place");
   await tapReader(page, surface, 0.15, true);
   await expectImage(image(2), pepperImages[2]);
   await tapReader(page, surface, 0.85);
   await expectImage(image(1), pepperImages[1]);
+  await tapReader(page, surface, 0.5);
   await setDrawer(surface, settingsMenu);
   await tap.uncheck();
   await closeMenus();
   await tapReader(page, surface, 0.15);
   assert.equal(await surface.locator(".kg-page-count").textContent(), "1 / 3", "disabled tap should not turn the page");
+  await tapReader(page, surface, 0.5);
+  assert.equal(await settingsToggle.isVisible(), false, "the center still works with tap-to-turn disabled");
+  await tapReader(page, surface, 0.5);
   await setDrawer(surface, settingsMenu);
   await tap.check();
   await checkEdgeLayout(page, surface);
@@ -465,6 +482,9 @@ async function testPagedReader(page, surface) {
   const right = await image(2).boundingBox();
   assert(left.x + left.width <= right.x + 1, "page one should move left of page two in LTR mode");
   await closeMenus();
+  await tapReader(page, surface, 0.5);
+  assert.equal(await navToggle.isVisible(), false, "the center should hide the buttons in double-page mode");
+  await tapReader(page, surface, 0.5);
   await tapReader(page, surface, 0.85);
   await expectImage(image(3), pepperImages[3]);
   await tapReader(page, surface, 0.15, true);

@@ -124,6 +124,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
   --edge-surface: var(--paper);
   display: contents;
 }
+.kg-reader-controls[hidden] { display: none; }
 .kg-edge, .kg-edge-panel {
   display: flex;
   align-items: center;

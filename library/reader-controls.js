@@ -251,12 +251,12 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
   return { close: dispose, resize };
 }
 
-function bindPageGestures(target, enabled, tapEnabled, navigate, listen) {
+function bindPageGestures(target, { enabled, tapEnabled, navigate, toggleControls }, listen) {
   const interactive = 'a, button, input, select, textarea, [contenteditable="true"]';
   let press;
   target.addEventListener('pointerdown', event => {
     press = enabled() && event.isPrimary && event.button === 0
-      ? { x: event.clientX, y: event.clientY, id: event.pointerId, time: event.timeStamp,
+      ? { x: event.clientX, y: event.clientY, id: event.pointerId, time: event.timeStamp, pointerType: event.pointerType,
         swipe: event.pointerType === 'touch' && !event.target.closest(interactive), moved: false } : null;
   }, listen);
   target.addEventListener('pointermove', event => {
@@ -278,15 +278,20 @@ function bindPageGestures(target, enabled, tapEnabled, navigate, listen) {
   target.addEventListener('click', event => {
     const down = press;
     press = null;
-    if (!down || down.moved || !enabled() || !tapEnabled() || event.defaultPrevented || event.button !== 0 || event.detail === 0 ||
-        (event.pointerId != null && event.pointerId !== down.id) || event.timeStamp - down.time > 650 ||
+    // WebKit can dispatch a mouse click with a different pointer ID after a touch.
+    const touchClick = down?.pointerType === 'touch' && event.pointerType === 'mouse';
+    if (!down || down.moved || !enabled() || event.defaultPrevented || event.button !== 0 || event.detail === 0 ||
+        (!touchClick && event.pointerId != null && event.pointerId !== down.id) || event.timeStamp - down.time > 650 ||
         Math.hypot(event.clientX - down.x, event.clientY - down.y) > 12 ||
         event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
         event.target.closest(interactive)) return;
     const rect = target.getBoundingClientRect();
     const x = (event.clientX - rect.left) / rect.width;
-    if (x >= 0 && x < 1 / 3) navigate('left');
-    else if (x > 2 / 3 && x <= 1) navigate('right');
+    if (x >= 1 / 3 && x <= 2 / 3) toggleControls();
+    else if (tapEnabled()) {
+      if (x >= 0 && x < 1 / 3) navigate('left');
+      else if (x > 2 / 3 && x <= 1) navigate('right');
+    }
   }, listen);
 }
 
@@ -413,11 +418,16 @@ export function mountReaderControls(container, options) {
   }
   function sideStep(side) { return (side === 'left') === (state.direction === 'rtl') ? 1 : -1; }
   options.tapTarget.classList.add('kg-page-gestures');
-  bindPageGestures(options.tapTarget, () => !picker && !openDrawer, () => state.tapToTurn, side => {
-    const step = sideStep(side);
-    if (state.mode !== 'scroll') { turn(step); return; }
-    const target = options.getCurrentPage() + step;
-    if (target >= 1 && target <= state.total) options.onPick(target);
+  bindPageGestures(options.tapTarget, {
+    enabled: () => !picker && !openDrawer,
+    tapEnabled: () => state.tapToTurn,
+    toggleControls: () => { toolbar.hidden = !toolbar.hidden; },
+    navigate(side) {
+      const step = sideStep(side);
+      if (state.mode !== 'scroll') { turn(step); return; }
+      const target = options.getCurrentPage() + step;
+      if (target >= 1 && target <= state.total) options.onPick(target);
+    },
   }, listen);
   const previous = readerButton(t('previousPage'), () => turn(-1));
   const next = readerButton(t('nextPage'), () => turn(1));

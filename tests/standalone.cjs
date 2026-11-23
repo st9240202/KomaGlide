@@ -186,6 +186,24 @@ async function expectComicExport(context, shelf, emptyShelf, pngs, engine) {
   }
 }
 
+async function expectCenterToggle(page, reader) {
+  const settings = reader.getByRole("button", { name: "閱讀設定", exact: true });
+  const navigation = reader.getByRole("button", { name: "頁面導覽", exact: true });
+  const artwork = reader.locator('img[data-index="1"]');
+  await artwork.scrollIntoViewIfNeeded();
+  const bounds = await artwork.boundingBox();
+  const x = bounds.x + bounds.width / 2;
+  const y = bounds.y + bounds.height / 2;
+  await settings.waitFor();
+  await page.touchscreen.tap(x, y);
+  assert.equal(await settings.isVisible(), false);
+  assert.equal(await navigation.isVisible(), false);
+  assert.deepEqual(await artwork.boundingBox(), bounds);
+  await page.touchscreen.tap(x, y);
+  assert.equal(await settings.isVisible(), true);
+  assert.equal(await navigation.isVisible(), true);
+}
+
 async function expectSwipeTurns(page, reader, direction) {
   const settings = reader.getByRole("button", { name: "閱讀設定", exact: true });
   const mode = reader.getByRole("combobox", { name: "閱讀模式" });
@@ -214,6 +232,7 @@ async function expectSwipeTurns(page, reader, direction) {
     await swipe(190, 240, 16 * forward, 0);
     await swipe(190, 240, 0, 140);
     assert.equal(await image(2).isVisible(), false, "short and vertical gestures should keep page one");
+    assert.equal(await settings.isVisible(), true, "short and vertical gestures should keep the buttons visible");
     await swipe(190 - 100 * forward, 240, 190 * forward, 0);
     await image(2).waitFor();
     await swipe(190 - 100 * forward, 240, 190 * forward, 0);
@@ -344,10 +363,11 @@ async function run() {
     await expectTouchTarget(page.getByRole("button", { name: "直向閱讀器", exact: true }));
     await expectDockInsideVisualViewport(page);
     await openReader(page, pngs);
-    if (engine === "chromium") {
-      await expectSwipeTurns(page, page.getByRole("dialog", { name: "直向閱讀器", exact: true }), "rtl");
-    }
     const reader = page.getByRole("dialog", { name: "直向閱讀器", exact: true });
+    await expectCenterToggle(page, reader);
+    if (engine === "chromium") {
+      await expectSwipeTurns(page, reader, "rtl");
+    }
     await reader.getByRole("button", { name: "閱讀設定", exact: true }).tap();
     await page.evaluate(() => { window.usingShelfAction = true; });
     await reader.getByRole("button", { name: "書庫", exact: true }).tap();
@@ -427,6 +447,7 @@ async function run() {
     await expectSavedPages(shelf, pngs);
     await shelf.reload();
     await expectSavedPages(shelf, pngs);
+    await expectCenterToggle(shelf, shelf.locator("#reader"));
     if (engine === "chromium") await expectSwipeTurns(shelf, shelf.locator("#reader"), "ltr");
 
     await shelf.goto(target.href);
