@@ -337,7 +337,12 @@
     const timeout = AbortSignal.timeout(20_000);
     const response = await fetch(address, {mode:'same-origin', credentials:'same-origin',
       signal:signal ? AbortSignal.any([signal, timeout]) : timeout});
-    if (!response.ok || !/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error(t('nextPageNotHtml'));
+    if (!response.ok) {
+      throw Object.assign(new Error(t('nextPageNotHtml')), {
+        status:response.status, retryAfter:response.headers.get('Retry-After')
+      });
+    }
+    if (!/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error(t('nextPageNotHtml'));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let html = '', size = 0;

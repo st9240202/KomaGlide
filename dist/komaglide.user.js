@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.14
+// @version      0.7.15
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
@@ -1705,6 +1705,51 @@ siteAdapters.push(function detectManhuagui(root, address) {
 const nhOrigin = 'https://nhentai.net';
 const nhRoute = /^\/g\/([1-9]\d*)(?:\/([1-9]\d*))?\/?$/;
 const nhPageLabel = '.reader-pagination .page-number';
+const nhRequestSpacing = 1200;
+const nhDefaultCooldown = 30_000;
+let nhNextRequestAt = 0;
+let nhDocumentQueue = Promise.resolve();
+
+async function nhWaitForRequest(signal) {
+  signal.throwIfAborted();
+  while (nhNextRequestAt > Date.now()) {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', cancel);
+        resolve();
+      }, Math.min(nhNextRequestAt - Date.now(), 2_147_483_647));
+      function cancel() {
+        clearTimeout(timer);
+        reject(signal.reason);
+      }
+      signal.addEventListener('abort', cancel, {once:true});
+    });
+    signal.throwIfAborted();
+  }
+}
+
+function nhFetchDocument(url, signal) {
+  // Pace reader HTML requests across visible pages and preloads. The image
+  // downloads can still run in parallel once their URLs are known.
+  const task = nhDocumentQueue.then(async () => {
+    for (let attempt = 0; ; attempt++) {
+      await nhWaitForRequest(signal);
+      nhNextRequestAt = Date.now() + nhRequestSpacing;
+      try {
+        return await fetchDocument(url, signal);
+      } catch (error) {
+        if (error.status !== 429) throw error;
+        const now = Date.now();
+        const retryAt = /^\d+$/.test(error.retryAfter)
+          ? now + Number(error.retryAfter) * 1000 : Date.parse(error.retryAfter);
+        nhNextRequestAt = Math.max(nhNextRequestAt, Number.isFinite(retryAt) ? retryAt : now + nhDefaultCooldown);
+        if (attempt > 0) throw error;
+      }
+    }
+  });
+  nhDocumentQueue = task.catch(() => {});
+  return task;
+}
 
 function nhImageUrl(value, address, index) {
   const url = webUrl(value, address);
@@ -1753,7 +1798,7 @@ siteAdapters.push(function detectNhentai(root, address) {
   async function resolvePage(index, signal) {
     if (!Number.isSafeInteger(index) || index < 1 || index > data.total) return null;
     const url = new URL(index + '/', chapterUrl);
-    const {root, address} = await fetchDocument(url.href, signal);
+    const {root, address} = await nhFetchDocument(url.href, signal);
     const target = nhRoute.exec(address.pathname);
     if (address.origin !== nhOrigin || target?.[1] !== id || target[2] !== String(index)) return null;
     const resolved = nhReadPage(root, address);
@@ -2778,7 +2823,12 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     const timeout = AbortSignal.timeout(20_000);
     const response = await fetch(address, {mode:'same-origin', credentials:'same-origin',
       signal:signal ? AbortSignal.any([signal, timeout]) : timeout});
-    if (!response.ok || !/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error(t('nextPageNotHtml'));
+    if (!response.ok) {
+      throw Object.assign(new Error(t('nextPageNotHtml')), {
+        status:response.status, retryAfter:response.headers.get('Retry-After')
+      });
+    }
+    if (!/text\/html/i.test(response.headers.get('content-type') || '')) throw new Error(t('nextPageNotHtml'));
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let html = '', size = 0;

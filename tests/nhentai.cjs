@@ -44,6 +44,7 @@ async function testNhentai(browser, bundle) {
     };
   }, png.toString('base64'));
   const fetched = [];
+  let rateLimited = false;
   let offline = false;
   await page.route(/^https:/, route => {
     const request = route.request();
@@ -52,8 +53,12 @@ async function testNhentai(browser, bundle) {
     if (url.origin !== origin) return route.abort();
     const reader = /^\/g\/777\/([1-3])\/$/.exec(url.pathname);
     if (request.resourceType() === 'fetch') {
-      fetched.push(url.pathname);
+      fetched.push({path:url.pathname, at:Date.now()});
       if (offline) return route.abort();
+      if (reader?.[1] === '1' && !rateLimited) {
+        rateLimited = true;
+        return route.fulfill({status:429, headers:{'Retry-After':'2'}});
+      }
     }
     const index = Number(reader?.[1]);
     const source = url.searchParams.has('mismatch') ? image(1) : image(index);
@@ -94,7 +99,9 @@ async function testNhentai(browser, bundle) {
   assert.equal(saved.chapter.chapterUrl, gallery);
   assert.equal(saved.chapter.chapterTitle, 'Fixture Gallery');
   assert.deepEqual(saved.pages.map(row => [row.index, row.imageUrl]), [1, 2, 3].map(n => [n, image(n)]));
-  assert.deepEqual(fetched.sort(), [galleryPath + '1/', galleryPath + '3/']);
+  assert.deepEqual(fetched.map(({path}) => path), [galleryPath + '1/', galleryPath + '1/', galleryPath + '3/']);
+  assert(fetched[1].at - fetched[0].at >= 1950, 'waits for Retry-After before retrying');
+  assert(fetched[2].at - fetched[1].at >= 1150, 'paces the following page request');
 
   offline = true;
   await visit(gallery + '3/');
