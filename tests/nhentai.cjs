@@ -29,8 +29,8 @@ async function testNhentai(browser, bundle) {
   page.setDefaultTimeout(8000);
   await page.addInitScript(bytes => {
     window.GM = {
-      getValue:async key => key === 'kg1.reader-view' ? {mode:'single'} : null,
-      setValue:async () => {}
+      getValue:async key => JSON.parse(localStorage.getItem(key)) ?? (key === 'kg1.reader-view' ? {mode:'single'} : null),
+      setValue:async (key, value) => localStorage.setItem(key, JSON.stringify(value))
     };
     window.GM_registerMenuCommand = window.GM_addValueChangeListener = () => {};
     window.imageReads = [];
@@ -66,7 +66,10 @@ async function testNhentai(browser, bundle) {
     return route.fulfill({contentType:'text/html; charset=utf-8', body:'<!doctype html><meta charset="utf-8">' + body});
   });
   const open = page.getByRole('button', {name:'直向閱讀器', exact:true});
+  const startPreload = page.getByRole('button', {name:'開始載入', exact:true});
   const dialog = page.getByRole('dialog', {name:'直向閱讀器', exact:true});
+  const settings = dialog.getByRole('button', {name:'閱讀設定', exact:true});
+  const preload = dialog.getByRole('combobox', {name:'並行預載數'});
   const privileged = () => page.evaluate(() => window.imageReads);
   async function visit(url) {
     await page.goto(url);
@@ -91,7 +94,18 @@ async function testNhentai(browser, bundle) {
   await visit(gallery);
   await page.getByText('已保存 1 頁 / 共 3 頁', {exact:true}).waitFor();
   assert.deepEqual(await privileged(), [], 'gallery thumbnails are never captured');
+  await startPreload.click();
+  const loading = page.getByRole('button', {name:'載入中…', exact:true});
+  await loading.waitFor();
+  assert.equal(await loading.isDisabled(), true);
+  await page.getByText('已保存 3 頁 / 共 3 頁', {exact:true}).waitFor({timeout:10000});
+  await startPreload.waitFor();
+  assert.equal(await dialog.count(), 0, 'preloading from the dock does not open the reader');
   await open.click();
+  await settings.click();
+  assert.equal(await preload.inputValue(), 'default');
+  assert.equal(await preload.locator('option:checked').textContent(), '使用網站預設（3 頁）');
+  await settings.click();
   await readPage(1);
   await dialog.locator('.buffer-progress').filter({hasText:/^已保存 3／3 頁$/}).waitFor({timeout:10000});
   const saved = await readSavedChapter(page, '777', '777');
@@ -104,10 +118,25 @@ async function testNhentai(browser, bundle) {
   assert(fetched[2].at - fetched[1].at >= 1150, 'paces the following page request');
 
   offline = true;
+  await page.evaluate(() => localStorage.setItem('kg1.parallel-preload', '2'));
   await visit(gallery + '3/');
   await open.click();
   await readPage(3);
   assert.deepEqual(await privileged(), [], 'a saved page is read from IndexedDB');
+  await settings.click();
+  assert.equal(await preload.inputValue(), '2', 'keeps the existing shared preference until the user chooses a site setting');
+  await preload.selectOption('4');
+  await visit(gallery + '3/');
+  await open.click();
+  await settings.click();
+  assert.equal(await preload.inputValue(), '4', 'remembers the site override');
+  assert.equal(await page.evaluate(() => localStorage.getItem('kg1.parallel-preload')), '2', 'site overrides keep the legacy setting intact');
+  await preload.selectOption('default');
+  await visit(gallery + '3/');
+  await open.click();
+  await settings.click();
+  assert.equal(await preload.inputValue(), 'default', 'resetting the site ignores the legacy value');
+  assert.equal(await preload.locator('option:checked').textContent(), '使用網站預設（3 頁）');
   await visit(origin + '/search/');
   assert.equal(await open.count(), 0);
   await page.close();

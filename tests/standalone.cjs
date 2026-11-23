@@ -28,7 +28,7 @@ function installManager() {
   window.GM_registerMenuCommand = (name, callback) => window.commands.set(name, callback);
   window.GM_openInTab = (url, options) => {
     window.tabRequests.push({url, options});
-    if (!window.usingShelfMenu) void window.unexpectedAccess("open tab " + url);
+    if (!window.usingShelfAction) void window.unexpectedAccess("open tab " + url);
     return { closed: false };
   };
   window.open = url => window.unexpectedAccess("open window " + url);
@@ -314,6 +314,15 @@ async function run() {
     if (engine === "chromium") {
       await expectSwipeTurns(page, page.getByRole("dialog", { name: "直向閱讀器", exact: true }), "rtl");
     }
+    const reader = page.getByRole("dialog", { name: "直向閱讀器", exact: true });
+    await reader.getByRole("button", { name: "閱讀設定", exact: true }).tap();
+    await page.evaluate(() => { window.usingShelfAction = true; });
+    await reader.getByRole("button", { name: "書庫", exact: true }).tap();
+    await page.waitForFunction(() => window.tabRequests.length > 0);
+    assert.deepEqual(await page.evaluate(() => window.tabRequests), [
+      {url:chapter + "#komaglide/shelf", options:{active:true, setParent:false}},
+    ]);
+    assert.equal(await reader.isVisible(), true, "the shelf opens separately from the current reader");
     await page.close();
 
     // First load the chapter document again. Its image hints remain available
@@ -326,7 +335,7 @@ async function run() {
     await page.goto(unrelated);
     await page.waitForFunction(() => window.commands.has("開啟 KomaGlide 書庫"));
     await page.evaluate(async () => {
-      window.usingShelfMenu = true;
+      window.usingShelfAction = true;
       await window.commands.get("開啟 KomaGlide 書庫")();
     });
     await page.waitForFunction(() => window.tabRequests.length > 0);

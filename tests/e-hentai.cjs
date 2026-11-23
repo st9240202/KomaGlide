@@ -92,9 +92,10 @@ async function testGallery(browser, bundle, origin) {
   await settings.click();
   assert.equal(await dialog.locator('.source-chapter-subtitle').textContent(), japaneseTitle);
   assert.equal(await buffering.inputValue(), 'chapter', 'whole chapter is the default for existing preferences');
-  assert.equal(await parallelPreload.inputValue(), '3');
+  assert.equal(await parallelPreload.inputValue(), 'default');
+  assert.equal(await parallelPreload.locator('option:checked').textContent(), '使用網站預設（3 頁）');
   assert.deepEqual(await parallelPreload.locator('option').evaluateAll(options => options.map(option => option.value)),
-    ['1', '2', '3', '4', '5', '6']);
+    ['default', '1', '2', '3', '4', '5', '6']);
   if (origin === 'https://exhentai.org') {
     await settings.click();
     const progress = dialog.locator('.buffer-progress');

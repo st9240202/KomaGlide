@@ -378,8 +378,12 @@ export function mountReaderControls(container, options) {
     buffer.value = options.bufferMode;
   }
   if (options.parallelPreload) {
-    const {value, choices, onChange} = options.parallelPreload;
-    const preload = menu(t('parallelPreload'), choices.map(count => [count, t(count === 1 ? 'pageCountOne' : 'pageCount', {count})]), onChange);
+    const {value, defaultValue, choices, onChange} = options.parallelPreload;
+    const pageCount = count => t(count === 1 ? 'pageCountOne' : 'pageCount', {count});
+    const preload = menu(t('parallelPreload'), [
+      ['default', t('siteDefaultPreload', {pages:pageCount(defaultValue)})],
+      ...choices.map(count => [count, pageCount(count)])
+    ], onChange);
     preload.value = String(value);
   }
   const theme = menu(t('appearance'), [['system', t('systemTheme')], ['light', t('lightTheme')], ['dark', t('darkTheme')]], onTheme);

@@ -48,6 +48,7 @@ Add a JavaScript file under `src/sites/` and register it with `siteAdapters.push
 - You can include the known page count `total` and the opening page `startIndex`. Use `nextPage` for the next page in the chapter and `nextChapter` for the next chapter. Omitted fields fall back to generic link detection. Set a field to `null` to stop there. Continuation stays within the same origin.
 - For sites that load images as you scroll, provide `revealPage(index)` to scroll the original page into view and return whether it was found. The pop-up reader checks the library first and calls this only when the page is missing and the original site has yet to provide an image URL.
 - For sites that show one image at a time, provide an asynchronous `resolvePage(index, signal)`. The reader checks the library first and uses the original site's page selector for a missing page. Wait for the page number and loaded image to match before returning the entry. See the [Manhuagui adapter](src/sites/manhuagui.js).
+- Adapters that can load pages independently can set `parallelPages: true` and specify `defaultParallelPreload` (1–6, defaults to 3). Users can override the setting for the current site in Reading Settings or select “Site default” to restore it.
 - Rebuild and install the generated userscript. Check page order and network requests when opening a chapter directly, continuing on the original tab, using the pop-up reader, and opening the library from the script menu.
 
 ## Testing

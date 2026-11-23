@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.15
+// @version      0.7.16
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
@@ -122,6 +122,7 @@ const translations = {
   bufferChapter: ['停留時緩衝整話', 'Preload chapter when idle', '操作を止めると全ページを先読み', '停留时预载整话'],
   bufferAhead: ['只預載後面 3 頁', 'Preload next 3 pages', '次の3ページだけ先読み', '只预载后面 3 页'],
   parallelPreload: ['並行預載數', 'Parallel Preloads', '同時先読み数', '并行预载数'],
+  siteDefaultPreload: ['使用網站預設（{pages}）', 'Site default ({pages})', 'サイトの既定値（{pages}）', '使用网站默认值（{pages}）'],
   pageDirection: ['翻頁方向', 'Reading Direction', 'ページをめくる方向', '翻页方向'],
   rtl: ['從右到左', 'Right to Left', '右から左', '从右到左'],
   ltr: ['從左到右', 'Left to Right', '左から右', '从左到右'],
@@ -142,6 +143,8 @@ const translations = {
   verticalReader: ['直向閱讀器', 'Vertical Reader', '縦読みリーダー', '纵向阅读器'],
   retry: ['重試', 'Retry', '再試行', '重试'],
   retryPages: ['重試缺頁', 'Retry Missing Pages', '未取得のページを再試行', '重试缺页'],
+  startPreload: ['開始載入', 'Start Preload', '先読み開始', '开始预载'],
+  preloading: ['載入中…', 'Preloading…', '先読み中…', '正在预载…'],
   waitingForPage: ['等候原站載入第 {page} 頁…', 'Waiting for the site to load page {page}…', 'サイトが {page} ページを読み込むのを待っています…', '等待原网站加载第 {page} 页…'],
   sitePageFailed: ['原站未能載入第 {page} 頁。', 'The site could not load page {page}.', 'サイトが {page} ページを読み込めませんでした。', '原网站未能加载第 {page} 页。'],
   pageNotSavedOnSite: ['第 {page} 頁尚未儲存，請在原站載入此頁。', 'Page {page} is not saved. Load it on the original site.', '{page} ページは未保存です。元のサイトで開いてください。', '第 {page} 页尚未保存，请在原网站加载此页。'],
@@ -1807,7 +1810,8 @@ siteAdapters.push(function detectNhentai(root, address) {
 
   return {workId:id, workTitle:data.title, chapterId:id, chapterTitle:data.title, chapterUrl,
     entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index,
-    resolvePage, parallelPages:true, pageLabelSelector:nhPageLabel, nextPage:null, nextChapter:null};
+    resolvePage, parallelPages:true, defaultParallelPreload:3, pageLabelSelector:nhPageLabel,
+    nextPage:null, nextChapter:null};
 });
 
 siteAdapters.push(function detectPepper(root, address) {
@@ -2398,8 +2402,12 @@ function mountReaderControls(container, options) {
     buffer.value = options.bufferMode;
   }
   if (options.parallelPreload) {
-    const {value, choices, onChange} = options.parallelPreload;
-    const preload = menu(t('parallelPreload'), choices.map(count => [count, t(count === 1 ? 'pageCountOne' : 'pageCount', {count})]), onChange);
+    const {value, defaultValue, choices, onChange} = options.parallelPreload;
+    const pageCount = count => t(count === 1 ? 'pageCountOne' : 'pageCount', {count});
+    const preload = menu(t('parallelPreload'), [
+      ['default', t('siteDefaultPreload', {pages:pageCount(defaultValue)})],
+      ...choices.map(count => [count, pageCount(count)])
+    ], onChange);
     preload.value = String(value);
   }
   const theme = menu(t('appearance'), [['system', t('systemTheme')], ['light', t('lightTheme')], ['dark', t('darkTheme')]], onTheme);
@@ -2547,11 +2555,15 @@ function mountReaderControls(container, options) {
     @media(prefers-color-scheme:dark) {
       .dock {color-scheme:dark;--paper:#171b18;--ink:#e5e9e2;--muted:#b2baaf;--line:#636e63;--surface:#242b24;--hover:#354237;--accent:#a7c8ad;--alert:#eeb9a5}
     }
-    .dock button {min-width:44px;min-height:44px;margin:0;padding:4px 12px;border:0;border-radius:0;font:inherit;color:var(--ink)}
+    .dock button {min-width:44px;min-height:44px;margin:0;padding:4px clamp(6px, 2.5vw, 12px);border:0;border-radius:0;font:inherit;color:var(--ink)}
     .dock button:focus-visible {outline-offset:-3px}
     .dock .dock-reader {border-radius:7px 0 0 7px;background:var(--surface);color:var(--accent);font-weight:700}
     .dock .dock-reader:hover {background:var(--hover)}
+    .dock .dock-preload {border-left:1px solid var(--line)}
     .dock .dock-shelf {border-left:1px solid var(--line);border-radius:0 7px 7px 0;text-align:start;font-weight:600}
+    @media (min-width:20rem) {
+      .dock .dock-reader, .dock .dock-preload {flex-shrink:0;white-space:nowrap}
+    }
     .dock-count {display:block;color:var(--muted);font-size:12px;font-weight:400;line-height:1.35;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
     .dock-error {
       position:absolute;right:0;bottom:calc(100% + 5px);width:max-content;max-width:min(300px,calc(100vw - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px) - 18px));
@@ -2849,8 +2861,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     return {root:template.content, address:new URL(response.url)};
   }
 
-  async function fetchChapter(address) {
-    const parsed = await fetchDocument(address);
+  async function fetchChapter(address, signal) {
+    const parsed = await fetchDocument(address, signal);
     const chapter = detectChapter(parsed.root, parsed.address);
     if (!chapter) throw new Error(t('nextChapterUnrecognized'));
     return chapter;
@@ -2880,11 +2892,21 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 
   const VIEW = PREFIX + 'reader-view';
   const PARALLEL_PRELOAD = PREFIX + 'parallel-preload';
+  const SITE_PARALLEL_PRELOAD = PARALLEL_PRELOAD + '.' + location.origin;
   const PARALLEL_PRELOAD_CHOICES = [1, 2, 3, 4, 5, 6];
   const DEFAULT_PARALLEL_PRELOAD = 3;
   const READ_AHEAD_PAGES = 3;
   const BUFFER_IDLE_MS = 1200;
+  async function readParallelPreload(chapter) {
+    if (!chapter.parallelPages) return null;
+    const [site, legacy] = await Promise.all([
+      read(SITE_PARALLEL_PRELOAD).catch(() => null), read(PARALLEL_PRELOAD).catch(() => null)
+    ]);
+    return site ?? legacy;
+  }
   function createFlow(root, first, overlay, view = {}) {
+    const {onPreloadFinished} = view;
+    const preload = Boolean(onPreloadFinished);
     const controller = new AbortController();
     const pane = element('main', '', 'pages');
     const chapterActions = element('div', '', overlay ? 'chapter-actions' : 'tail');
@@ -2909,8 +2931,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     let current = first, busy = false, nearEnd = false, stopped = false;
     let imageTasks = Promise.resolve();
     let bufferMode = view.bufferMode === 'ahead' ? 'ahead' : 'chapter';
-    let parallelPreload = PARALLEL_PRELOAD_CHOICES.includes(view.parallelPreload)
-      ? view.parallelPreload : DEFAULT_PARALLEL_PRELOAD;
+    const defaultParallelPreload = PARALLEL_PRELOAD_CHOICES.includes(first.defaultParallelPreload)
+      ? first.defaultParallelPreload : DEFAULT_PARALLEL_PRELOAD;
+    const savedParallelPreload = PARALLEL_PRELOAD_CHOICES.includes(view.parallelPreload) ? view.parallelPreload : null;
+    let parallelPreload = savedParallelPreload ?? defaultParallelPreload;
     let bufferScheduled = false, bufferReadyAt = 0, bufferCursor = 0;
     let bufferGroup, bufferPosition, bufferLayout, bufferRevision = 0;
     const bufferAttempts = new WeakMap();
@@ -2928,7 +2952,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     const requests = new WeakMap();
     const waitingForSource = new WeakSet();
     const options = {root: overlay || null, rootMargin:'360px 0px'};
-    const imageObserver = new IntersectionObserver(changes => {
+    const imageObserver = preload ? null : new IntersectionObserver(changes => {
       for (const change of changes) {
         const figure = change.target;
         if (change.isIntersecting) loadFigure(figure);
@@ -2969,7 +2993,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       figure.style.minHeight = 'min(60vh, 420px)';
     }
     function revealNativePage(figure, index) {
-      if (!overlay || !liveChapter?.revealPage || groups[0].figures.get(index) !== figure) return false;
+      if ((!overlay && !preload) || !liveChapter?.revealPage || groups[0].figures.get(index) !== figure) return false;
       const before = {left:window.scrollX, top:window.scrollY, behavior:'instant'};
       if (!liveChapter.revealPage(index)) return false;
       if (window.scrollX !== before.left || window.scrollY !== before.top) sourceScroll ??= before;
@@ -2978,7 +3002,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     async function resolveFigure(figure, showNotice) {
       const page = entries.get(figure);
       const source = liveChapter;
-      if (page.imageUrl || !overlay || !source?.resolvePage || groups[0].figures.get(page.index) !== figure) return page;
+      if (page.imageUrl || (!overlay && !preload) || !source?.resolvePage || groups[0].figures.get(page.index) !== figure) return page;
       const notice = showNotice && element('figcaption', t('waitingForPage', {page: page.index}));
       if (notice) figure.append(notice);
       try {
@@ -3047,10 +3071,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       progressTimer = setTimeout(updateBufferProgress, 80);
     }
     async function bufferNextPage() {
-      if (stopped || document.hidden) return false;
+      if (stopped || (!preload && document.hidden)) return false;
       if (performance.now() < bufferReadyAt) return true;
-      const full = bufferMode === 'chapter';
-      const end = lastVisiblePage();
+      const full = preload || bufferMode === 'chapter';
+      const end = preload ? 0 : lastVisiblePage();
       const count = full ? group.total : Math.min(READ_AHEAD_PAGES, group.total - end);
       const parallel = group === groups[0] && liveChapter?.parallelPages;
       const limit = parallel ? parallelPreload : 1;
@@ -3083,7 +3107,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     async function bufferPage(figure) {
       const revision = bufferRevision;
       const page = entries.get(figure);
-      const stillWanted = () => !stopped && !document.hidden && revision === bufferRevision;
+      const stillWanted = () => !stopped && (preload || !document.hidden) && revision === bufferRevision;
       try {
         let resolved = page;
         if (!(await lookupPage(page, false)).exists) {
@@ -3107,16 +3131,19 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
           bufferReadyAt = performance.now() + 1000;
         } else {
           failedBuffers.set(figure, error.message);
-          showBufferErrors();
+          if (!preload) showBufferErrors();
         }
       }
+    }
+    function bufferFailure(missing) {
+      const [figure, reason] = missing[0];
+      return t('bufferMissing', {count: missing.length, page: figure.dataset.index, reason});
     }
     function showBufferErrors() {
       const missing = [...failedBuffers].filter(([figure]) => group.figures.get(Number(figure.dataset.index)) === figure);
       bufferError.hidden = !missing.length;
       if (missing.length) {
-        const [figure, reason] = missing[0];
-        bufferError.replaceChildren(t('bufferMissing', {count: missing.length, page: figure.dataset.index, reason}) + ' ',
+        bufferError.replaceChildren(bufferFailure(missing) + ' ',
           button(t('retryPages'), () => {
             for (const [page] of missing) {
               failedBuffers.delete(page);
@@ -3129,7 +3156,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       scheduleBufferProgress();
     }
     function scheduleBuffer() {
-      if (!overlay || stopped || document.hidden || bufferScheduled) return;
+      if ((!overlay && !preload) || stopped || (!preload && document.hidden) || bufferScheduled) return;
       bufferScheduled = true;
       // Start behind queued visible work. Native pagers keep using the same
       // serial queue because selecting a new page replaces the current image.
@@ -3138,12 +3165,16 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         // Independent requests don't block a turn to a page outside their batch.
         const finished = task.catch(error => {
           console.warn('[KomaGlide]', error);
+          if (preload) message.textContent = error.message;
           return false;
         });
         if (!(group === groups[0] && liveChapter?.parallelPages)) imageTasks = finished;
         void finished.then(more => {
           bufferScheduled = false;
           if (more) scheduleBuffer();
+          else if (preload && !stopped) {
+            onPreloadFinished(message.textContent || (failedBuffers.size ? bufferFailure([...failedBuffers]) : ''));
+          }
         });
       }, Math.max(100, bufferReadyAt - performance.now()));
     }
@@ -3212,7 +3243,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (following) section.figures = new Map([...section.figures].sort(([a], [b]) => a - b));
       section.lastIndex = Math.max(section.lastIndex, page.index);
       pane.insertBefore(figure, before);
-      imageObserver.observe(figure);
+      imageObserver?.observe(figure);
       return figure;
     }
     function ensureFigure(section, index) {
@@ -3239,7 +3270,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (Number.isSafeInteger(chapter.total)) section.total = Math.max(section.total, chapter.total);
       // A single-image native pager exposes just the current page's URL.
       // Reserve its numbered slots so a scroll can request any page, including offline copies.
-      if (overlay && chapter.resolvePage) {
+      if ((overlay || preload) && (chapter.resolvePage || (preload && chapter.revealPage))) {
         for (let index = previousTotal + 1; index <= section.total; index++) ensureFigure(section, index);
       }
       for (const entry of [...chapter.entries].sort((a, b) => a.index - b.index)) {
@@ -3252,8 +3283,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
           entries.set(existing, page);
           if (!displayedImages.has(existing) && (previousUrl || waitingForSource.has(existing))) {
             releaseFigure(existing);
-            imageObserver.unobserve(existing);
-            imageObserver.observe(existing);
+            imageObserver?.unobserve(existing);
+            imageObserver?.observe(existing);
           }
         } else insertFigure(section, page);
         section.total = Math.max(section.total, page.index);
@@ -3350,6 +3381,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       return null;
     }
     function renderEnd() {
+      if (preload) return;
       const next = target();
       const paged = overlay && mode !== 'scroll';
       const atEnd = !paged || visibleEnd() === group.total;
@@ -3374,7 +3406,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       message.textContent = t('connecting');
       renderEnd();
       try {
-        let chapter = await fetchChapter(next.url);
+        let chapter = await fetchChapter(next.url, controller.signal);
         if (stopped) return;
         visited.add(next.url);
         if (next.same) {
@@ -3401,8 +3433,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         message.textContent = '';
         if (overlay) scheduleBufferProgress();
         // Re-observe the boundary after layout. Small chapters may still fit in view.
-        boundary.unobserve(endMarker);
-        boundary.observe(endMarker);
+        if (!preload) {
+          boundary.unobserve(endMarker);
+          boundary.observe(endMarker);
+        }
       } catch (err) {
         message.textContent = err.message;
       } finally {
@@ -3424,11 +3458,18 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       updateView();
     });
     chapterActions.append(message, previousGroup, nextButton);
-    if (!overlay) chapterActions.append(toggleControl(controller.signal));
+    if (!overlay && !preload) chapterActions.append(toggleControl(controller.signal));
     root.append(pane, endMarker);
+    if (preload) {
+      addPages(first, false);
+      scheduleBuffer();
+    }
     if (overlay) {
       addPages(first, false);
-      const settingsExtras = [chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal), button(t('closeReader'), () => overlay.close())];
+      const settingsExtras = [
+        chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal),
+        button(t('library'), openShelf), button(t('closeReader'), () => overlay.close())
+      ];
       overlay.append(...settingsExtras, chapterActions, bufferProgress);
       getShelfEvents().changes.addEventListener('change', ({detail}) => {
         if (detail.kind === 'limit' || (detail.kind === 'saved' && detail.workId === group.chapter.workId &&
@@ -3438,12 +3479,14 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         mode, theme, direction, tapToTurn, thumbnailSize, keyTarget:overlay, themeTarget:overlay, tapTarget:pane, onMode:changeMode,
         settingsExtras, navigationExtras:[chapterActions], bufferMode,
         parallelPreload: first.parallelPages ? {
-          value: parallelPreload,
+          value: savedParallelPreload ?? 'default',
+          defaultValue: defaultParallelPreload,
           choices: PARALLEL_PRELOAD_CHOICES,
           onChange(value) {
-            parallelPreload = Number(value);
+            const choice = value === 'default' ? value : Number(value);
+            parallelPreload = choice === 'default' ? defaultParallelPreload : choice;
             // Let in-flight requests finish. The next batch uses the new limit.
-            void write(PARALLEL_PRELOAD, parallelPreload);
+            void write(SITE_PARALLEL_PRELOAD, choice);
             scheduleBuffer();
           }
         } : null,
@@ -3500,7 +3543,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       }, {passive:true, signal:controller.signal});
     }
     renderEnd();
-    boundary.observe(endMarker);
+    if (!preload) boundary.observe(endMarker);
     function dispose() {
       stopped = true;
       checkNativeBuffer?.();
@@ -3508,7 +3551,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       controls?.destroy();
       cancelAnimationFrame(scrollFrame);
       clearTimeout(progressTimer);
-      imageObserver.disconnect();
+      imageObserver?.disconnect();
       boundary.disconnect();
       for (const {url} of displayedImages.values()) URL.revokeObjectURL(url);
       if (sourceScroll && liveChapter) window.scrollTo(sourceScroll);
@@ -3563,19 +3606,50 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     errorNotice.tabIndex = 0;
     const open = button(t('verticalReader'), openReader);
     open.className = 'dock-reader';
-    dock.append(open, status, errorNotice);
+    const preloadButton = button(t('startPreload'), startPreload);
+    preloadButton.className = 'dock-preload';
+    dock.append(open, preloadButton, status, errorNotice);
     root.append(dock);
     document.body.append(host);
     trackDockViewport(dock);
     let chapter, inlineHost, inlineFlow, dialog, overlayFlow;
+    let preloadJob, preloadError = '', captureError = '';
+
+    function updatePreloadStatus() {
+      preloadButton.disabled = Boolean(preloadJob);
+      const label = t(preloadJob ? 'preloading' : preloadError ? 'retryPages' : 'startPreload');
+      if (preloadButton.textContent !== label) preloadButton.textContent = label;
+      const detail = preloadError || captureError;
+      if (errorNotice.textContent !== detail) errorNotice.textContent = detail;
+    }
+    function stopPreload() {
+      preloadJob?.flow?.dispose();
+      preloadJob = null;
+      updatePreloadStatus();
+    }
+    async function startPreload() {
+      if (preloadJob || dialog || !chapter) return;
+      const job = {};
+      preloadJob = job;
+      preloadError = '';
+      updatePreloadStatus();
+      const parallelPreload = await readParallelPreload(chapter);
+      if (preloadJob !== job) return;
+      job.flow = createFlow(element('div'), chapter, null, {
+        parallelPreload,
+        onPreloadFinished(error) {
+          preloadError = error;
+          stopPreload();
+        }
+      });
+    }
     async function openReader() {
       if (dialog || !chapter) return;
+      const resumePreload = preloadJob && chapter.chapterUrl;
+      stopPreload();
       dialog = element('dialog');
       dialog.setAttribute('aria-label',t('verticalReader'));
-      const [view, parallelPreload] = await Promise.all([
-        read(VIEW).catch(() => null),
-        chapter.parallelPages ? read(PARALLEL_PRELOAD).catch(() => null) : null
-      ]);
+      const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), readParallelPreload(chapter)]);
       root.append(dialog);
       dialog.showModal();
       const savedOverflow = document.documentElement.style.overflow;
@@ -3587,6 +3661,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         dialog = null;
         document.documentElement.style.overflow = savedOverflow;
         open.focus({preventScroll:true});
+        if (resumePreload && resumePreload === chapter.chapterUrl) void startPreload();
       }, {once:true});
       overlayFlow = createFlow(dialog, chapter, dialog, {...view, parallelPreload});
     }
@@ -3596,7 +3671,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         const changed = chapter?.chapterId !== value.chapterId || chapter?.workId !== value.workId;
         chapter = value;
         overlayFlow?.refreshSource(value);
+        preloadJob?.flow?.refreshSource(value);
         if (!changed) return;
+        preloadError = captureError = '';
+        stopPreload();
         inlineFlow?.dispose();
         inlineFlow = null;
         inlineHost?.remove();
@@ -3610,8 +3688,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       },
       show(text, error) {
         count.textContent = text;
-        const detail = error || '';
-        if (errorNotice.textContent !== detail) errorNotice.textContent = detail;
+        captureError = error || '';
+        updatePreloadStatus();
       }
     };
   }
