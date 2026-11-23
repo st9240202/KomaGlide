@@ -19,6 +19,33 @@ function chapterHTML(imagesAvailable) {
     '<h1>第一話</h1><span data-comic-work="測試作品"></span><div id="comic">' + slots + '</div>';
 }
 
+async function expectMobileReaderWidth(page) {
+  for (const [kind, original] of [["missing", null], ["fixed", "width=980"]]) {
+    await page.goto(chapter + "?viewport=" + kind);
+    const width = page.viewportSize().width;
+    await page.waitForFunction(deviceWidth => document.documentElement.clientWidth > deviceWidth, width);
+    const originalScale = await page.evaluate(() => visualViewport.scale);
+    await page.waitForFunction(() => window.commands.has("直向閱讀器"));
+    await page.evaluate(() => window.commands.get("直向閱讀器")());
+    const reader = page.getByRole("dialog", { name: "直向閱讀器", exact: true });
+    const image = reader.locator('img[data-index="1"]');
+    await image.waitFor();
+    await page.waitForFunction(deviceWidth =>
+      Math.abs(document.documentElement.clientWidth - deviceWidth) <= 1 &&
+      Math.abs(visualViewport.scale - 1) < 0.01, width);
+    const bounds = await image.boundingBox();
+    assert(Math.abs(bounds.width - width) <= 1, "a mobile scroll page should fill the viewport width");
+    assert(Math.abs(bounds.width / bounds.height - 9 / 7) < 0.01, "the image keeps its aspect ratio");
+    await reader.getByRole("button", { name: "閱讀設定", exact: true }).tap();
+    await reader.getByRole("button", { name: "關閉閱讀器", exact: true }).tap();
+    await page.waitForFunction(({content, deviceWidth, scale}) =>
+      (document.querySelector('meta[name="viewport"]')?.content ?? null) === content &&
+      document.documentElement.clientWidth > deviceWidth &&
+      Math.abs(visualViewport.scale - scale) < 0.02,
+    {content:original, deviceWidth:width, scale:originalScale});
+  }
+}
+
 function installManager() {
   window.GM = { getValue: window.managerGet, setValue: window.managerSet };
   window.commands = new Map();
@@ -294,6 +321,12 @@ async function run() {
     await context.route(/^https?:/, async route => {
       const url = route.request().url().split("#")[0];
       if (url === chapter) return route.fulfill({ contentType: "text/html; charset=utf-8", body: chapterHTML(imagesAvailable) });
+      if (url === chapter + "?viewport=missing" || url === chapter + "?viewport=fixed") {
+        const meta = url.endsWith("fixed") ? '<meta name="viewport" content="width=980">' : "";
+        const body = chapterHTML(imagesAvailable).replace(/<meta name="viewport"[^>]*>/,
+          meta + '<link rel="canonical" href="' + chapter + '">');
+        return route.fulfill({ contentType: "text/html; charset=utf-8", body });
+      }
       if (url === unrelated || url === origin + "/") {
         return route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Start</title>" });
       }
@@ -422,6 +455,7 @@ async function run() {
     await shelf.locator('html[lang="zh-Hant"]').waitFor({ state: "attached" });
     await shelf.getByRole("heading", { name: "本站書庫", exact: true }).waitFor();
     await expectComicExport(context, shelf, page, pngs, engine);
+    await expectMobileReaderWidth(page);
     assert.equal(pageCount, 3);
     assert.deepEqual(unexpected, [], "no automatic tabs, library requests or uncached image loads");
     console.log(engine + ": capture, cached reread, chapter reload, interface languages and offline ZIP downloads passed on touch layout");

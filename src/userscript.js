@@ -170,7 +170,7 @@
     }
     if (location.origin === nhOrigin && nhRoute.exec(location.pathname)?.[1] === page.chapterId &&
         nhImageUrl(url, location, page.index)) return fetchPublicImage(url, nhOrigin);
-    if (location.origin === 'https://tw.manhuagui.com' &&
+    if (manhuaguiOrigins.has(location.origin) &&
         location.pathname === '/comic/' + page.workId + '/' + page.chapterId + '.html' &&
         manhuaguiImageUrl(url, location)) return fetchPublicImage(url, location.origin);
     if (['https://img7.8comic.com', 'https://img9.8comic.com'].includes(url.origin)) {
@@ -315,6 +315,9 @@
     h2 {font:600 1.35rem/1.35 "DM Sans","PingFang TC",sans-serif;margin:1.2rem 0;overflow-wrap:anywhere}
     figure {padding:0;margin:0 auto 10px;background:var(--well);width:100%}
     figure img {display:block;max-width:100%;height:auto;margin:auto} figure figcaption {padding:8px;color:var(--alert)}
+    @media (pointer:coarse) {
+      dialog:not(.paged) .pages figure img {width:100%}
+    }
     label {display:inline-flex;align-items:center;gap:4px;white-space:nowrap} input {accent-color:var(--accent)}
     dialog.paged[open] {overflow:hidden}
     .paged .chapter-boundary {display:none}
@@ -1095,6 +1098,49 @@
     update();
   }
 
+  function fitReaderViewport() {
+    const viewport = window.visualViewport;
+    if (!viewport || !matchMedia('(pointer: coarse)').matches) return;
+    const width = document.documentElement.clientWidth;
+    const scale = viewport.scale;
+    const deviceWidth = viewport.width * scale;
+    if (width <= deviceWidth + 1) return;
+
+    // A desktop-width page can leave the mobile browser zoomed out even when
+    // the dialog fills the layout viewport. Use the device width while it is open.
+    const content = 'width=device-width, initial-scale=1';
+    const original = [...document.head.querySelectorAll('meta[name="viewport" i]')]
+      .map(meta => [meta, meta.getAttribute('content')]);
+    const added = original.length ? null : element('meta');
+    if (added) {
+      added.name = 'viewport';
+      added.content = content;
+      document.head.append(added);
+    }
+    for (const [meta] of original) meta.content = content;
+    return async () => {
+      const owned = (added ? [[added, null]] : original).filter(([meta]) => meta.content === content);
+      if (!owned.length) return;
+      const afterLayout = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      // Chromium can retain both the last viewport width and zoom after
+      // removing a viewport tag. Apply the original values before removing it.
+      const restoredScale = scale * (viewport.width * viewport.scale / deviceWidth);
+      const previousView = 'width=' + width + ', initial-scale=' + restoredScale;
+      for (const [meta] of owned) meta.content = previousView;
+      await afterLayout();
+      for (const [meta, previous] of owned) {
+        if (meta.content !== previousView) continue;
+        if (meta === added) meta.content = '';
+        else if (previous === null) meta.removeAttribute('content');
+        else meta.content = previous;
+      }
+      if (added?.content === '') {
+        await afterLayout();
+        if (added.content === '') added.remove();
+      }
+    };
+  }
+
   function sourceReader() {
     const host = element('div');
     host.className = 'kg-source-tools';
@@ -1156,16 +1202,18 @@
       dialog = element('dialog');
       dialog.setAttribute('aria-label',t('verticalReader'));
       const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), readParallelPreload(chapter)]);
+      const restoreViewport = fitReaderViewport();
       root.append(dialog);
       dialog.showModal();
       const savedOverflow = document.documentElement.style.overflow;
       document.documentElement.style.overflow = 'hidden';
-      dialog.addEventListener('close', () => {
+      dialog.addEventListener('close', async () => {
         overlayFlow?.dispose();
         overlayFlow = null;
         dialog.remove();
-        dialog = null;
         document.documentElement.style.overflow = savedOverflow;
+        if (restoreViewport) await restoreViewport();
+        dialog = null;
         open.focus({preventScroll:true});
         if (resumePreload && resumePreload === chapter.chapterUrl) void startPreload();
       }, {once:true});

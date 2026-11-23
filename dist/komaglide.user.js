@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.17
+// @version      0.7.18
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
@@ -1615,6 +1615,8 @@ siteAdapters.push(function detectEHentai(root, address) {
 
 // The native pager reuses its main image. Scroll mode also appends captioned images.
 const manhuaguiImages = new WeakMap();
+const manhuaguiOrigins = new Set(['https://tw.manhuagui.com', 'https://m.manhuagui.com']);
+const manhuaguiRoute = /^\/comic\/(\d+)\/(\d+)\.html$/;
 
 function manhuaguiImageUrl(value, base) {
   const url = webUrl(value, base);
@@ -1622,10 +1624,94 @@ function manhuaguiImageUrl(value, base) {
     /\.(?:webp|jpe?g|png|gif|avif)$/i.test(url.pathname) ? url : null;
 }
 
+function manhuaguiLoadedEntry(img, index, address) {
+  if (!img?.complete || img.naturalWidth <= 2 || img.naturalHeight <= 2) return null;
+  const url = manhuaguiImageUrl(img.currentSrc, address);
+  if (!url || url.href !== webUrl(img.getAttribute('src'), address)?.href) return null;
+  return {index, img, imageUrl:url.href};
+}
+
+function manhuaguiCurrentEntry(box, img, index, address) {
+  const entry = manhuaguiLoadedEntry(img, index, address);
+  if (!entry) return null;
+  const previous = manhuaguiImages.get(box);
+  if (previous?.imageUrl === entry.imageUrl && previous.index !== index) return null;
+  manhuaguiImages.set(box, entry);
+  return entry;
+}
+
+function waitForManhuaguiPage(box, counter, index, signal, currentPage, selectPage) {
+  const before = currentPage();
+  if (before?.index === index) return before;
+  return new Promise(resolve => {
+    function finish(result) {
+      clearTimeout(timer);
+      observer.disconnect();
+      box.removeEventListener('load', check, true);
+      signal.removeEventListener('abort', cancel);
+      resolve(result);
+    }
+    function check() {
+      const entry = currentPage();
+      if (entry?.index === index) finish(entry);
+    }
+    const cancel = () => finish(null);
+    const observer = new MutationObserver(check);
+    const timer = setTimeout(cancel, 15_000);
+    observer.observe(box, {subtree:true, childList:true, attributes:true, attributeFilter:['src','srcset']});
+    observer.observe(counter, {subtree:true, childList:true, characterData:true});
+    box.addEventListener('load', check, true);
+    signal.addEventListener('abort', cancel, {once:true});
+    selectPage();
+    check();
+  });
+}
+
+function detectMobileManhuagui(root, address, workId, chapterId) {
+  const heading = root.querySelector('#mangaTitle');
+  const work = heading?.querySelector('a[href]');
+  const workUrl = webUrl(work?.getAttribute('href'), address);
+  const workTitle = work?.textContent.trim();
+  const chapterTitle = heading?.textContent.trim().slice(workTitle?.length).trim();
+  const counter = root.querySelector('.manga-page #pageNo');
+  const box = root.querySelector('#manga');
+  const total = Number(/^\s*\d+\s*\/\s*(\d+)\s*P\s*$/i.exec(counter?.parentElement.textContent || '')?.[1]);
+  if (workUrl?.origin !== address.origin || workUrl.pathname !== '/comic/' + workId + '/' || !workTitle || !chapterTitle ||
+      !box || !Number.isSafeInteger(total) || total < 1) return null;
+
+  const hashPage = () => Number(new URLSearchParams(location.hash.slice(1)).get('p') || 1);
+  function currentPage() {
+    const index = Number(counter.textContent.trim());
+    if (index !== hashPage() || !Number.isSafeInteger(index) || index < 1 || index > total) return null;
+    return manhuaguiCurrentEntry(box, box.querySelector(':scope > img'), index, address);
+  }
+  function resolvePage(index, signal) {
+    if (signal.aborted || !box.isConnected || !Number.isSafeInteger(index) ||
+        index < 1 || index > total || location.pathname !== address.pathname) return null;
+    return waitForManhuaguiPage(box, counter, index, signal, currentPage, () => {
+      if (hashPage() === index) return;
+      const oldURL = location.href;
+      const url = new URL(oldURL);
+      url.hash = 'p=' + index;
+      // Let the site's own pager load that image without adding a history
+      // entry for each page buffered by the reader.
+      history.replaceState(history.state, '', url.href);
+      window.dispatchEvent(new HashChangeEvent('hashchange', {oldURL, newURL:url.href}));
+    });
+  }
+
+  const entry = currentPage();
+  const start = hashPage();
+  return {workId, workTitle, chapterId, chapterTitle, chapterUrl:address.origin + address.pathname,
+    total, entries:entry ? [entry] : [], startIndex:Number.isSafeInteger(start) && start >= 1 && start <= total ? start : 1,
+    pageLabelSelector:'#pageNo', resolvePage, nextPage:null, nextChapter:null};
+}
+
 siteAdapters.push(function detectManhuagui(root, address) {
-  const route = /^\/comic\/(\d+)\/(\d+)\.html$/.exec(address.pathname);
-  if (address.origin !== 'https://tw.manhuagui.com' || !route || root !== document) return null;
+  const route = manhuaguiRoute.exec(address.pathname);
+  if (!manhuaguiOrigins.has(address.origin) || !route || root !== document) return null;
   const [, workId, chapterId] = route;
+  if (address.hostname === 'm.manhuagui.com') return detectMobileManhuagui(root, address, workId, chapterId);
   const work = root.querySelector('.title h1 a[href]');
   const workUrl = webUrl(work?.getAttribute('href'), address);
   const workTitle = work?.textContent.trim();
@@ -1638,50 +1724,17 @@ siteAdapters.push(function detectManhuagui(root, address) {
   const total = select?.options.length;
   if (!box || !counter || !total || ![...select.options].every((option, i) => option.value === String(i + 1))) return null;
 
-  function loadedEntry(img, index) {
-    if (!img?.complete || img.naturalWidth <= 2 || img.naturalHeight <= 2) return null;
-    const url = manhuaguiImageUrl(img.currentSrc, address);
-    if (!url || url.href !== webUrl(img.getAttribute('src'), address)?.href) return null;
-    return {index, img, imageUrl: url.href};
-  }
-
   function currentPage() {
     const index = Number(counter.textContent.trim());
     if (!Number.isInteger(index) || index < 1 || index > total || select.value !== String(index)) return null;
-    const entry = loadedEntry(box.querySelector('img#mangaFile'), index);
-    if (!entry) return null;
-    const previous = manhuaguiImages.get(box);
-    if (previous?.imageUrl === entry.imageUrl && previous.index !== index) return null;
-    manhuaguiImages.set(box, entry);
-    return entry;
+    return manhuaguiCurrentEntry(box, box.querySelector('img#mangaFile'), index, address);
   }
 
   function resolvePage(index, signal) {
     if (signal.aborted || !select.isConnected || !select.options[index - 1] || location.pathname !== address.pathname) return null;
-    const before = currentPage();
-    if (before?.index === index) return before;
-    return new Promise(resolve => {
-      function finish(result) {
-        clearTimeout(timer);
-        observer.disconnect();
-        box.removeEventListener('load', check, true);
-        signal.removeEventListener('abort', cancel);
-        resolve(result);
-      }
-      function check() {
-        const entry = currentPage();
-        if (entry?.index === index) finish(entry);
-      }
-      const cancel = () => finish(null);
-      const observer = new MutationObserver(check);
-      const timer = setTimeout(cancel, 15_000);
-      observer.observe(box, {subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset']});
-      observer.observe(counter, {subtree: true, childList: true, characterData: true});
-      box.addEventListener('load', check, true);
-      signal.addEventListener('abort', cancel, {once: true});
+    return waitForManhuaguiPage(box, counter, index, signal, currentPage, () => {
       select.value = String(index);
       select.dispatchEvent(new Event('change', {bubbles: true}));
-      check();
     });
   }
 
@@ -1698,7 +1751,7 @@ siteAdapters.push(function detectManhuagui(root, address) {
     if (!number || Number(number[2]) !== total) continue;
     const index = Number(number[1]);
     if (index < 1 || index > total || entries.has(index)) continue;
-    const entry = loadedEntry(img, index);
+    const entry = manhuaguiLoadedEntry(img, index, address);
     if (entry) entries.set(index, entry);
   }
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl: address.origin + address.pathname,
@@ -1943,7 +1996,7 @@ siteAdapters.push(function detectGeneric(root, address) {
     }
     if (location.origin === nhOrigin && nhRoute.exec(location.pathname)?.[1] === page.chapterId &&
         nhImageUrl(url, location, page.index)) return fetchPublicImage(url, nhOrigin);
-    if (location.origin === 'https://tw.manhuagui.com' &&
+    if (manhuaguiOrigins.has(location.origin) &&
         location.pathname === '/comic/' + page.workId + '/' + page.chapterId + '.html' &&
         manhuaguiImageUrl(url, location)) return fetchPublicImage(url, location.origin);
     if (['https://img7.8comic.com', 'https://img9.8comic.com'].includes(url.origin)) {
@@ -2585,6 +2638,9 @@ function mountReaderControls(container, options) {
     h2 {font:600 1.35rem/1.35 "DM Sans","PingFang TC",sans-serif;margin:1.2rem 0;overflow-wrap:anywhere}
     figure {padding:0;margin:0 auto 10px;background:var(--well);width:100%}
     figure img {display:block;max-width:100%;height:auto;margin:auto} figure figcaption {padding:8px;color:var(--alert)}
+    @media (pointer:coarse) {
+      dialog:not(.paged) .pages figure img {width:100%}
+    }
     label {display:inline-flex;align-items:center;gap:4px;white-space:nowrap} input {accent-color:var(--accent)}
     dialog.paged[open] {overflow:hidden}
     .paged .chapter-boundary {display:none}
@@ -3589,6 +3645,49 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     update();
   }
 
+  function fitReaderViewport() {
+    const viewport = window.visualViewport;
+    if (!viewport || !matchMedia('(pointer: coarse)').matches) return;
+    const width = document.documentElement.clientWidth;
+    const scale = viewport.scale;
+    const deviceWidth = viewport.width * scale;
+    if (width <= deviceWidth + 1) return;
+
+    // A desktop-width page can leave the mobile browser zoomed out even when
+    // the dialog fills the layout viewport. Use the device width while it is open.
+    const content = 'width=device-width, initial-scale=1';
+    const original = [...document.head.querySelectorAll('meta[name="viewport" i]')]
+      .map(meta => [meta, meta.getAttribute('content')]);
+    const added = original.length ? null : element('meta');
+    if (added) {
+      added.name = 'viewport';
+      added.content = content;
+      document.head.append(added);
+    }
+    for (const [meta] of original) meta.content = content;
+    return async () => {
+      const owned = (added ? [[added, null]] : original).filter(([meta]) => meta.content === content);
+      if (!owned.length) return;
+      const afterLayout = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      // Chromium can retain both the last viewport width and zoom after
+      // removing a viewport tag. Apply the original values before removing it.
+      const restoredScale = scale * (viewport.width * viewport.scale / deviceWidth);
+      const previousView = 'width=' + width + ', initial-scale=' + restoredScale;
+      for (const [meta] of owned) meta.content = previousView;
+      await afterLayout();
+      for (const [meta, previous] of owned) {
+        if (meta.content !== previousView) continue;
+        if (meta === added) meta.content = '';
+        else if (previous === null) meta.removeAttribute('content');
+        else meta.content = previous;
+      }
+      if (added?.content === '') {
+        await afterLayout();
+        if (added.content === '') added.remove();
+      }
+    };
+  }
+
   function sourceReader() {
     const host = element('div');
     host.className = 'kg-source-tools';
@@ -3650,16 +3749,18 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       dialog = element('dialog');
       dialog.setAttribute('aria-label',t('verticalReader'));
       const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), readParallelPreload(chapter)]);
+      const restoreViewport = fitReaderViewport();
       root.append(dialog);
       dialog.showModal();
       const savedOverflow = document.documentElement.style.overflow;
       document.documentElement.style.overflow = 'hidden';
-      dialog.addEventListener('close', () => {
+      dialog.addEventListener('close', async () => {
         overlayFlow?.dispose();
         overlayFlow = null;
         dialog.remove();
-        dialog = null;
         document.documentElement.style.overflow = savedOverflow;
+        if (restoreViewport) await restoreViewport();
+        dialog = null;
         open.focus({preventScroll:true});
         if (resumePreload && resumePreload === chapter.chapterUrl) void startPreload();
       }, {once:true});

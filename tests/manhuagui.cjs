@@ -10,6 +10,8 @@ const { launchSiteBrowser, readSavedChapter } = require("./site-fixture.cjs");
 const series = "https://tw.manhuagui.com/comic/23394/";
 const chapterUrl = series + "762877.html";
 const scrollChapterUrl = series + "924812.html";
+const mobileOrigin = "https://m.manhuagui.com";
+const mobileChapter = mobileOrigin + "/comic/23394/762877.html";
 const images = ["017", "003", "024", "009"].map(name =>
   "https://eu2.hamreus.com/ps3/u/rujiantxrml_xx/fixture/" + name + ".jpg.webp?fixture=public");
 
@@ -85,6 +87,57 @@ async function openReader(page) {
   return page.getByRole("dialog", { name: "直向閱讀器", exact: true });
 }
 
+async function testMobile(page, bundle, pngs) {
+  await page.goto(mobileOrigin + "/list/");
+  await page.addScriptTag({ content: bundle });
+  assert.equal(await page.getByRole("button", { name: "直向閱讀器", exact: true }).count(), 0);
+
+  await page.goto(mobileChapter + "#p=3");
+  await page.evaluate(urls => {
+    const current = () => Number(new URLSearchParams(location.hash.slice(1)).get("p") || 1);
+    function loadPage() {
+      const index = current();
+      document.querySelector("#pageNo").textContent = String(index);
+      setTimeout(() => {
+        if (current() !== index) return;
+        const img = document.createElement("img");
+        img.src = urls[index - 1];
+        document.querySelector("#manga").replaceChildren(img);
+      }, 200);
+    }
+    window.addEventListener("hashchange", loadPage);
+    loadPage();
+  }, images);
+  await installReader(page, bundle);
+  await page.getByText("已保存 1 頁 / 共 4 頁", { exact: true }).waitFor();
+  const initial = await readSavedChapter(page, "23394", "762877");
+  assert.deepEqual(initial.pages.map(row => [row.index, row.imageUrl]), [[3, images[2]]]);
+  const historyLength = await page.evaluate(() => history.length);
+
+  await page.getByRole("button", { name: "開始載入", exact: true }).click();
+  await page.getByText("已保存 4 頁 / 共 4 頁", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  assert.equal(await page.evaluate(() => history.length), historyLength, "preload should not add native history entries");
+  const saved = await readSavedChapter(page, "23394", "762877");
+  assert.deepEqual(saved.pages.map(row => [row.index, row.imageUrl]), images.map((url, i) => [i + 1, url]));
+  assert.equal(saved.chapter.chapterUrl, mobileChapter);
+  assert.equal(saved.chapter.chapterTitle, "短篇番外");
+  assert.equal(saved.chapter.workTitle, "測試作品");
+  const privileged = await page.evaluate(() => window.privileged);
+  assert.deepEqual(privileged.map(req => req.url).sort(), [...images].sort());
+  assert(privileged.every(req => req.anonymous && req.headers.Referer === mobileOrigin + "/"));
+
+  await page.goto(mobileChapter + "?cached=1#p=3");
+  await installReader(page, bundle);
+  const reader = await openReader(page);
+  await expectPage(reader, 3, pngs[2]);
+  await expectPage(reader, 4, pngs[3]);
+  await page.keyboard.press("PageUp");
+  await expectPage(reader, 1, pngs[0]);
+  await expectPage(reader, 2, pngs[1]);
+  assert.deepEqual(await page.evaluate(() => window.privileged), [], "reopening a cached chapter needs no image requests");
+}
+
 async function run() {
   const bundle = await readBundle();
   const browser = await launchSiteBrowser();
@@ -107,6 +160,15 @@ async function run() {
     const requests = [];
     await context.route(/^https?:\/\//, route => {
       const url = route.request().url();
+      if (url === mobileOrigin + "/list/") {
+        return route.fulfill({ contentType: "text/html", body: '<a href="/comic/23394/">測試作品</a>' });
+      }
+      if (url.split("?")[0] === mobileChapter) {
+        return route.fulfill({ contentType: "text/html; charset=utf-8",
+          body: '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<h1 id="mangaTitle"><a href="/comic/23394/">測試作品</a> 短篇番外</h1>' +
+            '<span class="manga-page"><b id="pageNo">1</b>/4P</span><div id="manga"></div>' });
+      }
       if (url === series || url === chapterUrl || url === scrollChapterUrl || url === series + "762878.html") {
         return route.fulfill({ contentType: "text/html;charset=utf-8", body: html });
       }
@@ -242,7 +304,9 @@ async function run() {
     const excluded = await readSavedChapter(page, "23394", "762878");
     assert.deepEqual(excluded.pages, [], "no-store responses must stay out of the library");
     assert.equal(excluded.chapter, undefined);
-    console.log("Manhuagui native selector, appended scroll pages, decoded page order and cached reader passed");
+    cacheControl = "max-age=315360000";
+    await testMobile(page, bundle, pngs);
+    console.log("Manhuagui desktop and mobile capture, preload, page order and cached reader passed");
   } finally { await browser.close(); }
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

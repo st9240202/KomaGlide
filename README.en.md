@@ -29,9 +29,9 @@ The default language is Traditional Chinese. Open the KomaGlide library and use 
 
 Select **Vertical Reader** on a comic page to use vertical scroll, single-page, or double-page mode. By default, after you stay on the same page for about one second, the reader preloads the entire chapter one page at a time. It starts from the current page and then fills in any earlier missing pages. You can also choose **Preload next 3 pages** under **Reading Settings** → **Preload Mode**. The reader remembers your choice, and both modes use saved images first. Use the settings on the left to change the appearance, reading direction, or tap-to-turn behavior. Use the navigation on the right to turn pages, jump with thumbnails, or go to an adjacent chapter. You can continue to the next chapter at the end, and the reader remembers the **Continue Automatically** setting.
 
-Manhuagui supports the site's own page selector and continuous scrolling. When the page selector is on page 1, images loaded as you scroll are also saved using the page numbers below them.
+On desktop Manhuagui, the site's page selector and continuous scrolling are supported. When the selector is on page 1, images loaded as you scroll are saved using the page numbers below them. On mobile, open a chapter from the list, then choose Start Preload to save the chapter or Vertical Reader to read it.
 
-Built-in site detection covers xkcd, Pepper&Carrot, selected 8comic reader pages, desktop reader pages on the Traditional Chinese edition of Kanmanhua (Manhuagui), and gallery and reader pages on nhentai.net. Mobile versions may use different URLs or layouts, so detection depends on the page. The limit per cached image is 32 MiB.
+Built-in site detection covers xkcd, Pepper&Carrot, selected 8comic reader pages, desktop and mobile reader pages on Manhuagui, and gallery and reader pages on nhentai.net. The limit per cached image is 32 MiB.
 
 ## Build
 
