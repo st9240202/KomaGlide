@@ -31,7 +31,7 @@ Select **Vertical Reader** on a comic page to use vertical scroll, single-page, 
 
 Manhuagui supports the site's own page selector and continuous scrolling. When the page selector is on page 1, images loaded as you scroll are also saved using the page numbers below them.
 
-Built-in site detection covers xkcd, Pepper&Carrot, selected 8comic reader pages, and desktop reader pages on the Traditional Chinese edition of Kanmanhua (Manhuagui). Mobile versions may use different URLs or layouts, so detection depends on the page. The limit per cached image is 32 MiB.
+Built-in site detection covers xkcd, Pepper&Carrot, selected 8comic reader pages, desktop reader pages on the Traditional Chinese edition of Kanmanhua (Manhuagui), and gallery and reader pages on nhentai.net. Mobile versions may use different URLs or layouts, so detection depends on the page. The limit per cached image is 32 MiB.
 
 ## Build
 

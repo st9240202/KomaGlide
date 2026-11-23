@@ -168,6 +168,8 @@
     if (ehOrigins.has(location.origin) && ehImageUrl(url, location)) {
       return fetchPublicImage(url, location.origin);
     }
+    if (location.origin === nhOrigin && nhRoute.exec(location.pathname)?.[1] === page.chapterId &&
+        nhImageUrl(url, location, page.index)) return fetchPublicImage(url, nhOrigin);
     if (location.origin === 'https://tw.manhuagui.com' &&
         location.pathname === '/comic/' + page.workId + '/' + page.chapterId + '.html' &&
         manhuaguiImageUrl(url, location)) return fetchPublicImage(url, location.origin);
