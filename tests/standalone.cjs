@@ -1,6 +1,8 @@
 // Run node scripts/build.mjs, then node tests/standalone.cjs.
 // Set TEST_BROWSER=webkit to exercise mobile WebKit with the same fixture.
+// Python 3 independently extracts and checks the downloaded ZIP files.
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const { mkdtemp, readFile, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
@@ -55,6 +57,106 @@ async function openReader(page, pngs) {
 async function expectTouchTarget(button) {
   const box = await button.boundingBox();
   assert(box && box.width >= 44 && box.height >= 44, "touch target must be at least 44 × 44 CSS pixels");
+}
+
+async function expectComicExport(context, shelf, emptyShelf, pngs, engine) {
+  await emptyShelf.goto(unrelated + "#komaglide/export");
+  await emptyShelf.getByRole("heading", { name: "書架上還沒有漫畫" }).waitFor();
+  assert.equal(await emptyShelf.getByRole("button", { name: "準備 ZIP" }).isEnabled(), false);
+
+  const addChapters = async ({ png, missingPage }) => {
+    const db = await new Promise((resolve, reject) => {
+      const open = indexedDB.open("komaglide-library-v1", 1);
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+    try {
+      const tx = db.transaction(["chapters", "pages"], "readwrite");
+      const chapters = tx.objectStore("chapters");
+      const pages = tx.objectStore("pages");
+      const bytes = Uint8Array.from(atob(png), char => char.charCodeAt(0)).buffer;
+      // Simulate existing WebKit byte records, including sparse and ungrouped pages.
+      for (const [workId, chapterId, chapterTitle, index] of [
+        ["another", "1", "同名章節", 2], ["another", "2", "同名章節", 10], ["", "3", "單話", 4],
+      ]) {
+        const key = [location.origin, workId, chapterId];
+        chapters.put({ key, workKnown: !!workId, workTitle: "漫畫/表紙?", chapterTitle,
+          count: 1, bytes: bytes.byteLength, total: 10, lastRead: workId ? 2 : 1 }, key);
+        if (!missingPage || chapterId !== "2") pages.put({ bytes, mime: "image/png" }, [...key, index]);
+      }
+      await new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally { db.close(); }
+  };
+  await shelf.evaluate(addChapters, { png: pngs[0], missingPage: true });
+  const mode = shelf.getByRole("link", { name: "匯出模式", exact: true });
+  await expectTouchTarget(mode);
+  await mode.tap();
+  const prepare = shelf.getByRole("button", { name: "準備 ZIP", exact: true });
+  const download = shelf.getByRole("link", { name: "下載 ZIP", exact: true });
+  const single = shelf.getByRole("checkbox", { name: "第一話", exact: true });
+  await single.waitFor();
+  assert.equal(await prepare.isEnabled(), false);
+  assert.equal(await shelf.getByRole("checkbox", { name: "同名章節" }).count(), 2);
+  await expectTouchTarget(shelf.locator(".export-check").first());
+  await single.press("Space");
+  await shelf.getByText("已選 1 話，共 2 頁", { exact: true }).waitFor();
+
+  async function downloadEntries() {
+    await prepare.tap();
+    await download.waitFor();
+    await expectTouchTarget(download);
+    const [file] = await Promise.all([shelf.waitForEvent("download"), download.tap()]);
+    assert.match(file.suggestedFilename(), /^KomaGlide-reader\.example-\d{4}-\d{2}-\d{2}\.zip$/);
+    const entries = execFileSync("python3", ["-c", [
+      "import base64, json, sys, zipfile",
+      "with zipfile.ZipFile(sys.argv[1]) as z:",
+      "    assert z.testzip() is None",
+      "    print(json.dumps([[name, base64.b64encode(z.read(name)).decode()] for name in z.namelist()]))",
+    ].join("\n"), await file.path()], { encoding: "utf8" });
+    return JSON.parse(entries);
+  }
+
+  const networkRequests = [];
+  const blockNetwork = route => {
+    networkRequests.push(route.request().url());
+    return route.abort("internetdisconnected");
+  };
+  const networkUrls = /^https?:/;
+  await context.route(networkUrls, blockNetwork);
+  // WebKit's Playwright offline switch also blocks reading freshly created local Blobs.
+  if (engine === "chromium") await context.setOffline(true);
+  try {
+    const images = await downloadEntries();
+    assert.deepEqual(images.map(([name, bytes]) => [name.split("/").at(-1), bytes]),
+      [["001.png", pngs[0]], ["002.png", pngs[1]]]);
+    await shelf.getByRole("button", { name: "全選", exact: true }).tap();
+    await shelf.getByText("已選 4 話，共 5 頁", { exact: true }).waitFor();
+    assert.equal(await download.isVisible(), false);
+    await prepare.tap();
+    await shelf.getByText("部分選取的章節已無法讀取，請確認選取後重試。", { exact: true }).waitFor();
+    assert.equal(await download.isVisible(), false);
+    await shelf.evaluate(addChapters, { png: pngs[0], missingPage: false });
+    const all = await downloadEntries();
+    assert.deepEqual(all.slice(0, 2), images);
+    assert.deepEqual(all.slice(2), [
+      ["2 - 漫畫_表紙_/1 - 同名章節/002.png", pngs[0]],
+      ["2 - 漫畫_表紙_/2 - 同名章節/010.png", pngs[0]],
+      ["3 - 單話/004.png", pngs[0]],
+    ]);
+    await shelf.getByRole("button", { name: "清除選取", exact: true }).tap();
+    await shelf.getByText("已選 0 話，共 0 頁", { exact: true }).waitFor();
+    assert.equal(await prepare.isEnabled(), false);
+    await shelf.getByRole("link", { name: "全部作品", exact: true }).tap();
+    await shelf.getByRole("link", { name: "第一話", exact: true }).waitFor();
+    assert.equal(await download.count(), 0);
+    assert.deepEqual(networkRequests, [], "ZIP preparation and download must use only local data");
+  } finally {
+    if (engine === "chromium") await context.setOffline(false);
+    await context.unroute(networkUrls, blockNetwork);
+  }
 }
 
 async function expectSwipeTurns(page, reader, direction) {
@@ -310,9 +412,10 @@ async function run() {
     await shelf.locator("#library-language").selectOption("zh-Hant");
     await shelf.locator('html[lang="zh-Hant"]').waitFor({ state: "attached" });
     await shelf.getByRole("heading", { name: "本站書庫", exact: true }).waitFor();
+    await expectComicExport(context, shelf, page, pngs, engine);
     assert.equal(pageCount, 3);
     assert.deepEqual(unexpected, [], "no automatic tabs, library requests or uncached image loads");
-    console.log(engine + ": capture, cached reread, chapter reload and all four interface languages passed on touch layout");
+    console.log(engine + ": capture, cached reread, chapter reload, interface languages and offline ZIP downloads passed on touch layout");
   } finally {
     await context?.close();
     await rm(profile, { recursive: true, force: true });

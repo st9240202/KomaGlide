@@ -43,8 +43,19 @@
         <nav aria-label="書庫篩選" data-i18n-label="libraryFilters">
           <a href="#shelf" id="all-tab" data-i18n="allWorks">全部作品</a>
           <a href="#favorites" id="star-tab" data-i18n="favorites">收藏</a>
+          <a href="#export" id="export-tab" data-i18n="exportMode">匯出模式</a>
         </nav>
         <span id="usage"></span>
+      </div>
+      <div id="export-tools" hidden>
+        <div class="export-actions">
+          <button id="export-select-all" type="button" data-i18n="exportSelectAll" disabled>全選</button>
+          <button id="export-prepare" class="primary" type="button" data-i18n="exportPrepare" disabled>準備 ZIP</button>
+          <a id="export-download" class="nav-action primary" data-i18n="exportDownload" hidden>下載 ZIP</a>
+        </div>
+        <p id="export-selection" class="count" role="status"></p>
+        <p class="count" data-i18n="exportSavedOnly">ZIP 只包含已儲存的頁面。</p>
+        <p id="export-status" role="status" hidden></p>
       </div>
       <div id="books"></div>
     </section>

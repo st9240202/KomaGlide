@@ -1,7 +1,7 @@
 const root = self.registration.scope;
 const prefix = 'komaglide-shell:' + root + ':';
-const cacheName = prefix + '9';
-const urls = ['index.html', 'library.css', 'reader-navigation.css', 'app.js', 'shelf.js', 'store.js', 'bridge.js', 'reader-controls.js', 'i18n.js'].map(path => new URL(path, root).href);
+const cacheName = prefix + '10';
+const urls = ['index.html', 'library.css', 'reader-navigation.css', 'app.js', 'shelf.js', 'store.js', 'bridge.js', 'reader-controls.js', 'i18n.js', 'comic-zip.js'].map(path => new URL(path, root).href);
 const entry = urls[0];
 
 self.addEventListener('install', event => {

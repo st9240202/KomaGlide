@@ -183,8 +183,45 @@ export async function lookupPage(page, includeBlob) {
   const pageKey = [...key, page.index];
   const data = await chapterRead(key, pages => request(includeBlob ? pages.get(pageKey) : pages.getKey(pageKey)));
   if (!includeBlob) return { exists: !!data };
-  const blob = data ? data.blob || new Blob([data.bytes], { type: data.mime }) : null;
-  return { exists: !!data, blob };
+  return { exists: !!data, blob: data ? storedImage(data) : null };
+}
+
+function storedImage(data) {
+  return data.blob || new Blob([data.bytes], { type: data.mime });
+}
+
+export async function readExportChapters(keys, validate, signal) {
+  return transaction(['chapters', 'pages'], 'readonly', async tables => {
+    const chapters = await Promise.all(keys.map(key => request(tables.chapters.get(key))));
+    signal.throwIfAborted();
+    if (chapters.some(chapter => !chapter?.count)) throw new Error(t('exportChapterMissing'));
+    validate(chapters);
+    const result = [];
+    for (const chapter of chapters) {
+      signal.throwIfAborted();
+      const pages = await new Promise((resolve, reject) => {
+        const images = [];
+        const scan = tables.pages.openCursor(indices(chapter.key));
+        scan.onerror = () => reject(scan.error);
+        scan.onsuccess = () => {
+          const cursor = scan.result;
+          if (signal.aborted) return reject(signal.reason);
+          if (!cursor) return resolve(images);
+          try {
+            const blob = storedImage(cursor.value);
+            if (!blob.size) throw new Error(t('exportChapterMissing'));
+            images.push({ index: cursor.key[3], blob });
+            cursor.continue();
+          } catch (error) {
+            reject(error);
+          }
+        };
+      });
+      if (pages.length !== chapter.count) throw new Error(t('exportChapterMissing'));
+      result.push({ chapter, pages });
+    }
+    return result;
+  });
 }
 
 export async function shelf() {

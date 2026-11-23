@@ -1,6 +1,7 @@
 import { locale, localeNames, localizeDocument, t } from './i18n.js';
-import { shelf, readChapter, readerBlob, setFavorite, setLimit } from './store.js';
+import { shelf, readChapter, readExportChapters, readerBlob, setFavorite, setLimit } from './store.js';
 import { makeReaderThumbnail, mountReaderControls, watchReaderTheme } from './reader-controls.js';
+import { makeComicZip, validateComicZip } from './comic-zip.js';
 
 export function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }) {
   localizeDocument();
@@ -34,6 +35,10 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   let activeKey;
   let retentionCheck = 0;
   let pendingRetentionRequest;
+  const selectedChapters = new Set();
+  let exportRows = [];
+  let exportJob;
+  let zipClickedAt = 0;
   const MiB = 1024 ** 2;
   const preferencesKey = 'komaglide.reader.preferences.v1';
 
@@ -166,8 +171,9 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     return link;
   }
 
-  function shelfChapterLink(chapter) {
-    const link = chapterLink(chapter);
+  function shelfChapterLink(chapter, checkboxId) {
+    const link = checkboxId ? el('label', chapter.chapterTitle, 'chapter-link') : chapterLink(chapter);
+    if (checkboxId) link.htmlFor = checkboxId;
     // Only separate an explicit chapter number from a named title. Keep the
     // original wording and separator for copying and assistive technology.
     const parts = /^(第\s*[0-9０-９〇零一二三四五六七八九十百千萬兩]+(?:[.．][0-9０-９]+)?\s*[話集章回卷冊]|(?:chapter|episode)\s+\d+(?:\.\d+)?)([：:]\s*|\s+)(\S[\s\S]*)$/iu.exec(chapter.chapterTitle);
@@ -242,7 +248,103 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     return button;
   }
 
-  function showBooks(data, starred) {
+  function exportStatus(text = '', error = false) {
+    const status = $('export-status');
+    status.toggleAttribute('data-error', error);
+    status.textContent = text;
+    status.hidden = !text;
+  }
+
+  function clearPreparedZip() {
+    exportJob?.abort();
+    exportJob = undefined;
+    const download = $('export-download');
+    const url = download.getAttribute('href');
+    if (url) {
+      const delay = zipClickedAt ? 60_000 - (Date.now() - zipClickedAt) : 0;
+      if (delay > 0) setTimeout(() => URL.revokeObjectURL(url), delay);
+      else URL.revokeObjectURL(url);
+      download.removeAttribute('href');
+      download.removeAttribute('download');
+    }
+    download.hidden = true;
+    $('export-prepare').hidden = false;
+    zipClickedAt = 0;
+    exportStatus();
+  }
+
+  function updateExportControls() {
+    let pages = 0;
+    for (const { checkbox, chapter } of exportRows) {
+      checkbox.checked = selectedChapters.has(checkbox.id);
+      checkbox.disabled = !!exportJob;
+      if (checkbox.checked) pages += chapter.count;
+    }
+    const all = $('export-select-all');
+    all.textContent = t(exportRows.length && selectedChapters.size === exportRows.length ? 'exportClear' : 'exportSelectAll');
+    all.disabled = !!exportJob || !exportRows.length;
+    $('export-prepare').disabled = !!exportJob || !selectedChapters.size;
+    const summary = t('exportSelected', {count: selectedChapters.size.toLocaleString(locale), pages: pages.toLocaleString(locale)});
+    if ($('export-selection').textContent !== summary) $('export-selection').textContent = summary;
+  }
+
+  function exportCheckbox(chapter, checkbox) {
+    const target = el('label', null, 'export-check');
+    target.append(checkbox);
+    exportRows.push({ chapter, checkbox });
+    checkbox.onchange = () => {
+      clearPreparedZip();
+      if (checkbox.checked) selectedChapters.add(checkbox.id);
+      else selectedChapters.delete(checkbox.id);
+      updateExportControls();
+    };
+    return target;
+  }
+
+  $('export-select-all').onclick = () => {
+    clearPreparedZip();
+    const clear = selectedChapters.size === exportRows.length;
+    selectedChapters.clear();
+    if (!clear) for (const { checkbox } of exportRows) selectedChapters.add(checkbox.id);
+    updateExportControls();
+  };
+  $('export-download').onclick = () => { zipClickedAt = Date.now(); };
+  $('export-prepare').onclick = async () => {
+    if (exportJob || !selectedChapters.size) return;
+    const prepare = $('export-prepare');
+    const keys = exportRows.filter(({ checkbox }) => selectedChapters.has(checkbox.id)).map(({ chapter }) => chapter.key);
+    clearPreparedZip();
+    const job = exportJob = new AbortController();
+    const { signal } = job;
+    updateExportControls();
+    exportStatus(t('exportReading'));
+    try {
+      const chapters = await readExportChapters(keys, validateComicZip, signal);
+      const blob = await makeComicZip(chapters, { signal, progress: (done, total) => {
+        if (!signal.aborted) exportStatus(t('exportPackaging', {done, total}));
+      }});
+      if (signal.aborted) return;
+      const download = $('export-download');
+      const host = location.hostname.replace(/[^a-z0-9.-]/gi, '_');
+      download.href = URL.createObjectURL(blob);
+      download.download = 'KomaGlide-' + host + '-' + new Date().toISOString().slice(0, 10) + '.zip';
+      download.hidden = false;
+      if (document.activeElement === document.body || document.activeElement === prepare) download.focus({preventScroll: true});
+      prepare.hidden = true;
+      exportStatus(t('exportReady'));
+    } catch (error) {
+      if (signal.aborted) return;
+      const known = ['exportChapterMissing', 'exportTooLarge'].map(key => t(key));
+      exportStatus(known.includes(error?.message) ? error.message : t('exportFailed'), true);
+    } finally {
+      if (exportJob === job) {
+        exportJob = undefined;
+        updateExportControls();
+      }
+    }
+  };
+
+  function showBooks(data, starred, exporting) {
     const protectedWorks = new Set(data.favorites.map(key => JSON.stringify(key)));
     const groups = new Map();
     for (const chapter of data.chapters) {
@@ -255,6 +357,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       group.chapters.push(chapter);
       if (chapter.lastRead > group.recent.lastRead) group.recent = chapter;
     }
+    exportRows = [];
     const frag = document.createDocumentFragment();
     for (const group of [...groups.values()].sort((a, b) => b.recent.lastRead - a.recent.lastRead)) {
       const { recent, workKey, workStar } = group;
@@ -265,15 +368,19 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       names.append(el('h2', recent.workKnown ? recent.workTitle : t('ungrouped')),
         el('span', recent.key[0] + ' · ' + t(count === 1 ? 'chapterCountOne' : 'chapterCount', {count}), 'source'));
       head.append(names);
-      if (recent.workKnown) head.append(favoriteButton(workKey, workStar));
+      if (!exporting && recent.workKnown) head.append(favoriteButton(workKey, workStar));
       article.append(head);
       for (const chapter of group.chapters.sort(chaptersInOrder)) {
         const row = el('div', null, 'chapter-row');
-        const link = shelfChapterLink(chapter);
-        const bookmark = favoriteButton(chapter.key, chapter.favorite);
-        link.id = 'title-' + bookmark.id;
-        bookmark.setAttribute('aria-describedby', link.id);
-        row.append(link, el('span', countText(chapter), 'count'), bookmark);
+        const action = exporting ? el('input') : favoriteButton(chapter.key, chapter.favorite);
+        if (exporting) {
+          action.type = 'checkbox';
+          action.id = 'kg-export-' + chapter.key.map(encodeURIComponent).join('/');
+        }
+        const link = shelfChapterLink(chapter, exporting ? action.id : null);
+        link.id = 'title-' + action.id;
+        action.setAttribute(exporting ? 'aria-labelledby' : 'aria-describedby', link.id);
+        row.append(link, el('span', countText(chapter), 'count'), exporting ? exportCheckbox(chapter, action) : action);
         article.append(row);
       }
       frag.append(article);
@@ -288,8 +395,18 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     const books = $('books');
     const focusedId = books.contains(document.activeElement) && document.activeElement.id;
     books.replaceChildren(frag);
+    if (exporting) {
+      const visible = new Set(exportRows.map(({ checkbox }) => checkbox.id));
+      const previousCount = selectedChapters.size;
+      for (const id of selectedChapters) if (!visible.has(id)) selectedChapters.delete(id);
+      if (selectedChapters.size !== previousCount) {
+        clearPreparedZip();
+        exportStatus(t('exportChapterMissing'), true);
+      }
+      updateExportControls();
+    }
     if (focusedId) {
-      const nextFocus = $(focusedId) || $(starred ? 'star-tab' : 'all-tab');
+      const nextFocus = $(focusedId) || $(exporting ? 'export-tab' : starred ? 'star-tab' : 'all-tab');
       nextFocus.focus({ preventScroll: true });
     }
   }
@@ -463,15 +580,22 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     const reading = hash.startsWith('read/');
     const storage = hash === 'storage';
     const starred = hash === 'favorites';
+    const exporting = hash === 'export';
     if (reset) {
       notify();
       disposePages();
+      if (exporting !== !$('export-tools').hidden) $('books').replaceChildren();
+      clearPreparedZip();
+      selectedChapters.clear();
+      exportRows = [];
+      updateExportControls();
       activeKey = undefined;
       window.scrollTo(0, 0);
     }
     $('shelf').hidden = reading || storage;
     $('reader').hidden = !reading;
     $('storage').hidden = !storage;
+    $('export-tools').hidden = !exporting;
     themePicker.parentElement.hidden = reading;
     if (reading && reset) {
       $('chapter-head').replaceChildren(el('h1', t('loadingChapter')));
@@ -510,11 +634,11 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
         if (reset) void checkStorageProtection();
       } else {
         $('usage').textContent = size(used) + ' / ' + size(limit);
-        for (const [id, active] of [['all-tab', !starred], ['star-tab', starred]]) {
+        for (const [id, active] of [['all-tab', !starred && !exporting], ['star-tab', starred], ['export-tab', exporting]]) {
           if (active) $(id).setAttribute('aria-current', 'page');
           else $(id).removeAttribute('aria-current');
         }
-        showBooks(data, starred);
+        showBooks(data, starred, exporting);
       }
     } catch (error) {
       if (version === token) {

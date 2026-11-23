@@ -22,6 +22,7 @@
   /* INSERT_I18N */
   /* INSERT_SITE_STORE */
   /* INSERT_SHELF_EVENTS */
+  /* INSERT_COMIC_ZIP */
   /* INSERT_SHELF_VIEW */
 
   // Remember the page that can host each site's shelf. Comic bytes stay in that site's IndexedDB.
