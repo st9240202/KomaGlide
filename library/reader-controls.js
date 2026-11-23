@@ -254,10 +254,24 @@ function openThumbnailPicker(container, { total, current, direction, thumbnailSi
 function bindPageGestures(target, { enabled, tapEnabled, navigate, toggleControls }, listen) {
   const interactive = 'a, button, input, select, textarea, [contenteditable="true"]';
   let press;
+
+  function isTap(event, down) {
+    return down && !down.moved && !event.defaultPrevented && event.button === 0 &&
+      event.timeStamp - down.time <= 650 &&
+      Math.hypot(event.clientX - down.x, event.clientY - down.y) <= 12 &&
+      !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey &&
+      !event.target.closest(interactive);
+  }
+  function horizontalFraction(event) {
+    const rect = target.getBoundingClientRect();
+    return (event.clientX - rect.left) / rect.width;
+  }
+  function isCenter(x) { return x >= 1 / 3 && x <= 2 / 3; }
+
   target.addEventListener('pointerdown', event => {
-    press = enabled() && event.isPrimary && event.button === 0
+    press = enabled() && event.isPrimary && event.button === 0 && !event.target.closest(interactive)
       ? { x: event.clientX, y: event.clientY, id: event.pointerId, time: event.timeStamp, pointerType: event.pointerType,
-        swipe: event.pointerType === 'touch' && !event.target.closest(interactive), moved: false } : null;
+        moved: false } : null;
   }, listen);
   target.addEventListener('pointermove', event => {
     if (press?.id === event.pointerId && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 12) {
@@ -265,7 +279,13 @@ function bindPageGestures(target, { enabled, tapEnabled, navigate, toggleControl
     }
   }, listen);
   target.addEventListener('pointerup', event => {
-    if (!press?.swipe || press.id !== event.pointerId) return;
+    if (press?.pointerType !== 'touch' || press.id !== event.pointerId) return;
+    // Some touch interactions never generate a click. Consume the tap here.
+    if (enabled() && isTap(event, press) && isCenter(horizontalFraction(event))) {
+      press = null;
+      toggleControls();
+      return;
+    }
     const dx = event.clientX - press.x;
     const dy = event.clientY - press.y;
     if (Math.abs(dx) < 48 || Math.abs(dx) < 1.5 * Math.abs(dy)) return;
@@ -280,14 +300,10 @@ function bindPageGestures(target, { enabled, tapEnabled, navigate, toggleControl
     press = null;
     // WebKit can dispatch a mouse click with a different pointer ID after a touch.
     const touchClick = down?.pointerType === 'touch' && event.pointerType === 'mouse';
-    if (!down || down.moved || !enabled() || event.defaultPrevented || event.button !== 0 || event.detail === 0 ||
-        (!touchClick && event.pointerId != null && event.pointerId !== down.id) || event.timeStamp - down.time > 650 ||
-        Math.hypot(event.clientX - down.x, event.clientY - down.y) > 12 ||
-        event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
-        event.target.closest(interactive)) return;
-    const rect = target.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width;
-    if (x >= 1 / 3 && x <= 2 / 3) toggleControls();
+    if (!enabled() || !isTap(event, down) || event.detail === 0 ||
+        (!touchClick && event.pointerId != null && event.pointerId !== down.id)) return;
+    const x = horizontalFraction(event);
+    if (isCenter(x)) toggleControls();
     else if (tapEnabled()) {
       if (x >= 0 && x < 1 / 3) navigate('left');
       else if (x > 2 / 3 && x <= 1) navigate('right');
@@ -419,10 +435,14 @@ export function mountReaderControls(container, options) {
   function sideStep(side) { return (side === 'left') === (state.direction === 'rtl') ? 1 : -1; }
   options.tapTarget.classList.add('kg-page-gestures');
   bindPageGestures(options.tapTarget, {
-    enabled: () => !picker && !openDrawer,
+    enabled: () => !picker,
     tapEnabled: () => state.tapToTurn,
-    toggleControls: () => { toolbar.hidden = !toolbar.hidden; },
+    toggleControls() {
+      if (openDrawer) setDrawer(null, true);
+      else toolbar.hidden = !toolbar.hidden;
+    },
     navigate(side) {
+      if (openDrawer) return;
       const step = sideStep(side);
       if (state.mode !== 'scroll') { turn(step); return; }
       const target = options.getCurrentPage() + step;

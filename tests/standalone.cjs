@@ -186,7 +186,7 @@ async function expectComicExport(context, shelf, emptyShelf, pngs, engine) {
   }
 }
 
-async function expectCenterToggle(page, reader) {
+async function expectCenterToggle(page, reader, suppressClick = false) {
   const settings = reader.getByRole("button", { name: "閱讀設定", exact: true });
   const navigation = reader.getByRole("button", { name: "頁面導覽", exact: true });
   const artwork = reader.locator('img[data-index="1"]');
@@ -195,6 +195,13 @@ async function expectCenterToggle(page, reader) {
   const x = bounds.x + bounds.width / 2;
   const y = bounds.y + bounds.height / 2;
   await settings.waitFor();
+  if (suppressClick) {
+    await reader.evaluate(el => {
+      // A page or browser can suppress the click normally generated after touch.
+      const stopClick = event => event.preventDefault();
+      el.addEventListener("touchend", stopClick, { passive: false, once: true });
+    });
+  }
   await page.touchscreen.tap(x, y);
   assert.equal(await settings.isVisible(), false);
   assert.equal(await navigation.isVisible(), false);
@@ -229,6 +236,10 @@ async function expectSwipeTurns(page, reader, direction) {
   const forward = direction === "rtl" ? 1 : -1;
   try {
     await image(1).waitFor();
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 190, y: 240 }] });
+    await new Promise(resolve => setTimeout(resolve, 700));
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    assert.equal(await settings.isVisible(), true, "a long press should keep the buttons visible");
     await swipe(190, 240, 16 * forward, 0);
     await swipe(190, 240, 0, 140);
     assert.equal(await image(2).isVisible(), false, "short and vertical gestures should keep page one");
@@ -364,7 +375,7 @@ async function run() {
     await expectDockInsideVisualViewport(page);
     await openReader(page, pngs);
     const reader = page.getByRole("dialog", { name: "直向閱讀器", exact: true });
-    await expectCenterToggle(page, reader);
+    await expectCenterToggle(page, reader, true);
     if (engine === "chromium") {
       await expectSwipeTurns(page, reader, "rtl");
     }
