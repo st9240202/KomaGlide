@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.20
+// @version      0.7.21
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
@@ -3158,7 +3158,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       progressTimer = setTimeout(updateBufferProgress, 80);
     }
     async function bufferNextPage() {
-      if (stopped || (!preload && document.hidden)) return false;
+      if (stopped) return false;
       if (performance.now() < bufferReadyAt) return true;
       const full = preload || bufferMode === 'chapter';
       const end = preload ? 0 : lastVisiblePage();
@@ -3194,7 +3194,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     async function bufferPage(figure) {
       const revision = bufferRevision;
       const page = entries.get(figure);
-      const stillWanted = () => !stopped && (preload || !document.hidden) && revision === bufferRevision;
+      const stillWanted = () => !stopped && revision === bufferRevision;
       try {
         let resolved = page;
         if (!(await lookupPage(page, false)).exists) {
@@ -3243,7 +3243,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       scheduleBufferProgress();
     }
     function scheduleBuffer() {
-      if ((!overlay && !preload) || stopped || (!preload && document.hidden) || bufferScheduled) return;
+      if ((!overlay && !preload) || stopped || bufferScheduled) return;
       bufferScheduled = true;
       // Start behind queued visible work. Native pagers keep using the same
       // serial queue because selecting a new page replaces the current image.
@@ -3608,7 +3608,6 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       });
       updateView();
       if (mode === 'scroll' && position > 1) scrollToPosition();
-      document.addEventListener('visibilitychange', restartBuffer, {signal:controller.signal});
       const clearScrollAnchor = () => { scrollAnchor = null; if (mode === 'scroll') restartBuffer(); };
       const scrollInput = {passive:true, signal:controller.signal};
       for (const type of ['wheel', 'touchmove']) overlay.addEventListener(type, clearScrollAnchor, scrollInput);

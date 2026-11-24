@@ -580,7 +580,7 @@
       progressTimer = setTimeout(updateBufferProgress, 80);
     }
     async function bufferNextPage() {
-      if (stopped || (!preload && document.hidden)) return false;
+      if (stopped) return false;
       if (performance.now() < bufferReadyAt) return true;
       const full = preload || bufferMode === 'chapter';
       const end = preload ? 0 : lastVisiblePage();
@@ -616,7 +616,7 @@
     async function bufferPage(figure) {
       const revision = bufferRevision;
       const page = entries.get(figure);
-      const stillWanted = () => !stopped && (preload || !document.hidden) && revision === bufferRevision;
+      const stillWanted = () => !stopped && revision === bufferRevision;
       try {
         let resolved = page;
         if (!(await lookupPage(page, false)).exists) {
@@ -665,7 +665,7 @@
       scheduleBufferProgress();
     }
     function scheduleBuffer() {
-      if ((!overlay && !preload) || stopped || (!preload && document.hidden) || bufferScheduled) return;
+      if ((!overlay && !preload) || stopped || bufferScheduled) return;
       bufferScheduled = true;
       // Start behind queued visible work. Native pagers keep using the same
       // serial queue because selecting a new page replaces the current image.
@@ -1030,7 +1030,6 @@
       });
       updateView();
       if (mode === 'scroll' && position > 1) scrollToPosition();
-      document.addEventListener('visibilitychange', restartBuffer, {signal:controller.signal});
       const clearScrollAnchor = () => { scrollAnchor = null; if (mode === 'scroll') restartBuffer(); };
       const scrollInput = {passive:true, signal:controller.signal};
       for (const type of ['wheel', 'touchmove']) overlay.addEventListener(type, clearScrollAnchor, scrollInput);

@@ -212,6 +212,16 @@ async function run() {
     await installReader(observer, bundle);
     await observer.getByText(/已保存 1 頁/).waitFor();
     let reader = await openReader(page);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    // The reader is on pages 1–2. Pages 3–4 must reach the shelf while hidden.
+    await observer.getByText(/已保存 4 頁/).waitFor({ timeout: 8000 });
+    await page.evaluate(() => {
+      delete document.hidden;
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
     await expectPage(reader, 1);
     await expectPage(reader, 2);
     await page.keyboard.press("PageDown");
