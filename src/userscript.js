@@ -212,7 +212,7 @@
     const key = JSON.stringify([page.site, page.workId, page.chapterId, page.index]);
     if (!inFlightWrites.has(key)) {
       const task = (async () => {
-        const blob = await fetchImage(page);
+        const blob = await runSiteRequest(() => fetchImage(page));
         try {
           const chapterSubtitle = chapterSubtitles.get(page.chapterUrl) ?? page.chapterSubtitle;
           await putPage({...page, chapterSubtitle}, blob);
@@ -340,7 +340,10 @@
     return root;
   }
 
-  async function fetchDocument(address, signal) {
+  function fetchDocument(address, signal) {
+    return runSiteRequest(() => readDocument(address, signal), signal);
+  }
+  async function readDocument(address, signal) {
     const timeout = AbortSignal.timeout(20_000);
     const response = await fetch(address, {mode:'same-origin', credentials:'same-origin',
       signal:signal ? AbortSignal.any([signal, timeout]) : timeout});
@@ -404,14 +407,74 @@
   const SITE_PARALLEL_PRELOAD = PARALLEL_PRELOAD + '.' + location.origin;
   const PARALLEL_PRELOAD_CHOICES = [1, 2, 3, 4, 5, 6];
   const DEFAULT_PARALLEL_PRELOAD = 3;
+  const SITE_REQUEST_QUEUE = 'komaglide-site-request-queue';
+  const SITE_REQUEST_SLOTS = PARALLEL_PRELOAD_CHOICES.map(n => 'komaglide-site-request-' + n);
   const READ_AHEAD_PAGES = 3;
   const BUFFER_IDLE_MS = 1200;
-  async function readParallelPreload(chapter) {
-    if (!chapter.parallelPages) return null;
-    const [site, legacy] = await Promise.all([
-      read(SITE_PARALLEL_PRELOAD).catch(() => null), read(PARALLEL_PRELOAD).catch(() => null)
-    ]);
-    return site ?? legacy;
+  let siteRequestDefault = null;
+  let localSiteRequests = Promise.resolve();
+
+  async function readParallelPreload() {
+    return (await read(SITE_PARALLEL_PRELOAD).catch(() => null)) ?? read(PARALLEL_PRELOAD).catch(() => null);
+  }
+  async function siteRequestLimit() {
+    if (siteRequestDefault === null) return 1;
+    const choice = await readParallelPreload();
+    return PARALLEL_PRELOAD_CHOICES.includes(choice) ? choice : siteRequestDefault;
+  }
+  function defaultParallelPreloadFor(chapter) {
+    return PARALLEL_PRELOAD_CHOICES.includes(chapter.defaultParallelPreload)
+      ? chapter.defaultParallelPreload : DEFAULT_PARALLEL_PRELOAD;
+  }
+  function waitForDelay(ms, signal) {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', cancel);
+        resolve();
+      }, ms);
+      function cancel() {
+        clearTimeout(timer);
+        reject(signal.reason);
+      }
+      signal?.addEventListener('abort', cancel, {once:true});
+    });
+  }
+  function withSiteLock(name, signal, work) {
+    return navigator.locks ? navigator.locks.request(name, signal ? {signal} : {}, work) : work();
+  }
+  async function runSiteRequest(request, signal) {
+    const locks = navigator.locks;
+    const work = () => {
+      signal?.throwIfAborted();
+      return request();
+    };
+    if (!locks) {
+      const task = localSiteRequests.then(work);
+      localSiteRequests = task.catch(() => {});
+      return task;
+    }
+    while (true) {
+      let task;
+      // Count every occupied slot under one lock, including requests started
+      // before the user lowered the limit. Closing a tab releases its slots.
+      await withSiteLock(SITE_REQUEST_QUEUE, signal, async () => {
+        const limit = await siteRequestLimit();
+        const {held} = await locks.query();
+        const occupied = new Set(held.map(lock => lock.name).filter(name => SITE_REQUEST_SLOTS.includes(name)));
+        if (occupied.size >= limit) return;
+        const slot = SITE_REQUEST_SLOTS.find(name => !occupied.has(name));
+        let admit;
+        const admitted = new Promise(resolve => { admit = resolve; });
+        task = withSiteLock(slot, signal, () => {
+          admit();
+          return work();
+        });
+        await Promise.race([admitted, task]);
+      });
+      if (task) return task;
+      await waitForDelay(150, signal);
+    }
   }
   function createFlow(root, first, overlay, view = {}) {
     const {onPreloadFinished} = view;
@@ -440,10 +503,8 @@
     let current = first, busy = false, nearEnd = false, stopped = false;
     let imageTasks = Promise.resolve();
     let bufferMode = view.bufferMode === 'ahead' ? 'ahead' : 'chapter';
-    const defaultParallelPreload = PARALLEL_PRELOAD_CHOICES.includes(first.defaultParallelPreload)
-      ? first.defaultParallelPreload : DEFAULT_PARALLEL_PRELOAD;
+    const defaultParallelPreload = defaultParallelPreloadFor(first);
     const savedParallelPreload = PARALLEL_PRELOAD_CHOICES.includes(view.parallelPreload) ? view.parallelPreload : null;
-    let parallelPreload = savedParallelPreload ?? defaultParallelPreload;
     let bufferScheduled = false, bufferReadyAt = 0, bufferCursor = 0;
     let bufferGroup, bufferPosition, bufferLayout, bufferRevision = 0;
     const bufferAttempts = new WeakMap();
@@ -582,11 +643,11 @@
     async function bufferNextPage() {
       if (stopped) return false;
       if (performance.now() < bufferReadyAt) return true;
+      const limit = group === groups[0] && liveChapter?.parallelPages ? await siteRequestLimit() : 1;
+      if (stopped) return false;
       const full = preload || bufferMode === 'chapter';
       const end = preload ? 0 : lastVisiblePage();
       const count = full ? group.total : Math.min(READ_AHEAD_PAGES, group.total - end);
-      const parallel = group === groups[0] && liveChapter?.parallelPages;
-      const limit = parallel ? parallelPreload : 1;
       const figures = [];
       const start = full ? bufferCursor || end : end;
       // Walk forward from the current spread, then wrap to earlier missing pages.
@@ -991,11 +1052,9 @@
           value: savedParallelPreload ?? 'default',
           defaultValue: defaultParallelPreload,
           choices: PARALLEL_PRELOAD_CHOICES,
-          onChange(value) {
+          async onChange(value) {
             const choice = value === 'default' ? value : Number(value);
-            parallelPreload = choice === 'default' ? defaultParallelPreload : choice;
-            // Let in-flight requests finish. The next batch uses the new limit.
-            void write(SITE_PARALLEL_PRELOAD, choice);
+            await write(SITE_PARALLEL_PRELOAD, choice);
             scheduleBuffer();
           }
         } : null,
@@ -1178,16 +1237,13 @@
       preloadJob = null;
       updatePreloadStatus();
     }
-    async function startPreload() {
+    function startPreload() {
       if (preloadJob || dialog || !chapter) return;
       const job = {};
       preloadJob = job;
       preloadError = '';
       updatePreloadStatus();
-      const parallelPreload = await readParallelPreload(chapter);
-      if (preloadJob !== job) return;
       job.flow = createFlow(element('div'), chapter, null, {
-        parallelPreload,
         onPreloadFinished(error) {
           preloadError = error;
           stopPreload();
@@ -1200,7 +1256,7 @@
       stopPreload();
       dialog = element('dialog');
       dialog.setAttribute('aria-label',t('verticalReader'));
-      const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), readParallelPreload(chapter)]);
+      const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), chapter.parallelPages && readParallelPreload()]);
       const restoreViewport = fitReaderViewport();
       root.append(dialog);
       dialog.showModal();
@@ -1346,6 +1402,7 @@
     function scan() {
       const chapter = detectChapter();
       if (!chapter) return;
+      siteRequestDefault = chapter.parallelPages ? defaultParallelPreloadFor(chapter) : null;
       hasNativePager = Boolean(chapter.resolvePage);
       pageLabelSelector = chapter.pageLabelSelector;
       if (!controls) {

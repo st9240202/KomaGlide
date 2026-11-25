@@ -6,12 +6,14 @@ const hitomiHash = /^[a-f0-9]{64}$/;
 let hitomiGallery;
 let hitomiRouting;
 
-async function hitomiAsset(path) {
-  const response = await fetch(hitomiAssets + path, {
-    credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000)
+function hitomiAsset(path) {
+  return runSiteRequest(async () => {
+    const response = await fetch(hitomiAssets + path, {
+      credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000)
+    });
+    if (!response.ok) throw new Error('Hitomi HTTP ' + response.status);
+    return response.text();
   });
-  if (!response.ok) throw new Error('Hitomi HTTP ' + response.status);
-  return response.text();
 }
 
 function prepareHitomi(root, address, schedule) {

@@ -7,6 +7,7 @@ const origin = 'https://hitomi.la';
 const assets = 'https://ltn.gold-usergeneratedcontent.net';
 const gallery = '/unlisted-category/fixture-title-777.html';
 const nestedGallery = '/another-category/localized/other-title-777.html';
+const parallelGalleries = [778, 779];
 const tag = '/tag/fixture-title-777.html';
 const reader = '/reader/777.html';
 const hashes = ['a'.repeat(61) + 'abc', 'b'.repeat(61) + '12f', 'c'.repeat(61) + '301'];
@@ -29,11 +30,12 @@ async function run() {
   const bundle = await readFile(path.join(__dirname, '../dist/komaglide.user.js'), 'utf8');
   const browser = await launchSiteBrowser();
   try {
-    const page = await browser.newPage();
-    await page.addInitScript(() => {
+    const context = process.env.PLAYWRIGHT_BROWSER === 'webkit' ? browser : await browser.newContext();
+    const page = await context.newPage();
+    await context.addInitScript(() => {
       window.GM = {
-        getValue: async (_key, fallback) => fallback,
-        setValue: async () => {},
+        getValue: async (key, fallback) => JSON.parse(localStorage.getItem(key)) ?? fallback,
+        setValue: async (key, value) => localStorage.setItem(key, JSON.stringify(value)),
       };
       window.GM_registerMenuCommand = window.GM_addValueChangeListener = () => {};
     });
@@ -41,8 +43,11 @@ async function run() {
     let routingReads = 0;
     let metadataReads = 0;
     let cachedOnly = false;
+    let measureParallel = false;
+    let activeImages = 0;
+    let peakImages = 0;
     const cors = {'access-control-allow-origin': '*'};
-    await page.route(/^https:\/\//, route => {
+    await context.route(/^https:\/\//, async route => {
       const url = route.request().url();
       if (url === origin + '/all.html' || url === origin + tag) {
         return route.fulfill({contentType: 'text/html', body: '<a href="' + gallery + '">Catalog</a><a href="' + reader + '">Read</a>'});
@@ -53,14 +58,19 @@ async function run() {
       if (url === origin + nestedGallery || url === origin + '/galleries/777.html') {
         return route.fulfill({contentType: 'text/html', body: '<script src="' + assets + '/galleries/777.js"></script><h1>Fixture Title</h1>'});
       }
+      if (parallelGalleries.some(id => url === origin + '/galleries/' + id + '.html')) {
+        return route.fulfill({contentType: 'text/html', body: '<h1>Parallel fixture</h1>'});
+      }
       if (url === origin + reader) {
         return route.fulfill({contentType: 'text/html', body: '<div id="mobileImages"><picture>' +
           '<img class="lillie" src="' + native + '"></picture></div>' +
           '<div id="preload"><img class="lillie" src="' + images[2] + '"></div>'});
       }
-      if (url === assets + '/galleries/777.js') {
+      const metadataId = [777, ...parallelGalleries].find(id => url === assets + '/galleries/' + id + '.js');
+      if (metadataId) {
         if (route.request().resourceType() === 'fetch') metadataReads++;
-        const data = {id: '777', title: 'Fixture Title', galleryurl: gallery, files: hashes.map(hash => ({hash}))};
+        const data = {id: String(metadataId), title: 'Fixture Title', galleryurl: metadataId === 777
+          ? gallery : '/galleries/' + metadataId + '.html', files: hashes.map(hash => ({hash}))};
         return route.fulfill({headers: cors, body: 'var galleryinfo = ' + JSON.stringify(data) + ';'});
       }
       if (url === assets + '/gg.js') {
@@ -69,7 +79,13 @@ async function run() {
       }
       if (images.includes(url) || url === native) {
         if (route.request().resourceType() === 'fetch') imageFetches.push(url);
-        return cachedOnly ? route.abort() : route.fulfill({headers: cors, contentType: 'image/png', body: png});
+        if (cachedOnly) return route.abort();
+        if (!measureParallel) return route.fulfill({headers: cors, contentType: 'image/png', body: png});
+        peakImages = Math.max(peakImages, ++activeImages);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 350));
+          return await route.fulfill({headers: cors, contentType: 'image/png', body: png});
+        } finally { activeImages--; }
       }
       return route.abort();
     });
@@ -114,7 +130,22 @@ async function run() {
     assert.equal(await pageThree.evaluate(async img => { await img.decode(); return new URL(img.src).protocol; }), 'blob:');
     assert.deepEqual(imageFetches, [], 'the reader should reopen the requested page from the shared cache');
     assert.equal(routingReads, 1, 'cached images should not need the routing table');
-    console.log('Hitomi gallery preload, reader page order and cached reopening passed');
+
+    await overlay.getByRole('button', {name: '閱讀設定'}).click();
+    await overlay.getByRole('combobox', {name: '並行預載數'}).selectOption('2');
+    cachedOnly = false;
+    const tabs = await Promise.all(parallelGalleries.map(async id => {
+      const tab = await context.newPage();
+      await tab.goto(origin + '/galleries/' + id + '.html');
+      await tab.addScriptTag({content: bundle});
+      await tab.getByText('已保存 0 頁 / 共 3 頁', {exact: true}).waitFor();
+      return tab;
+    }));
+    measureParallel = true;
+    await Promise.all(tabs.map(tab => tab.getByRole('button', {name: '開始載入', exact: true}).click()));
+    await Promise.all(tabs.map(tab => tab.getByText('已保存 3 頁 / 共 3 頁', {exact: true}).waitFor()));
+    assert.equal(peakImages, 2, 'same-origin tabs share the configured parallel request limit');
+    console.log('Hitomi gallery preload, cached reopening and cross-tab request limit passed');
   } finally {
     await browser.close();
   }

@@ -25,9 +25,10 @@ function readerHTML(index, url) {
 }
 
 async function testNhentai(browser, bundle) {
-  const page = await browser.newPage();
+  const context = process.env.PLAYWRIGHT_BROWSER === 'webkit' ? browser : await browser.newContext();
+  const page = await context.newPage();
   page.setDefaultTimeout(8000);
-  await page.addInitScript(bytes => {
+  await context.addInitScript(bytes => {
     window.GM = {
       getValue:async key => JSON.parse(localStorage.getItem(key)) ?? (key === 'kg1.reader-view' ? {mode:'single'} : null),
       setValue:async (key, value) => localStorage.setItem(key, JSON.stringify(value))
@@ -45,24 +46,26 @@ async function testNhentai(browser, bundle) {
   }, png.toString('base64'));
   const fetched = [];
   let rateLimited = false;
+  let limitedPath = galleryPath + '1/';
   let offline = false;
-  await page.route(/^https:/, route => {
+  await context.route(/^https:/, route => {
     const request = route.request();
     const url = new URL(request.url());
     if (request.resourceType() === 'image') return route.fulfill({contentType:'image/png', body:png});
     if (url.origin !== origin) return route.abort();
-    const reader = /^\/g\/777\/([1-3])\/$/.exec(url.pathname);
+    const reader = /^\/g\/(?:777|778|779)\/([1-3])\/$/.exec(url.pathname);
     if (request.resourceType() === 'fetch') {
       fetched.push({path:url.pathname, at:Date.now()});
       if (offline) return route.abort();
-      if (reader?.[1] === '1' && !rateLimited) {
+      if (url.pathname === limitedPath && !rateLimited) {
         rateLimited = true;
         return route.fulfill({status:429, headers:{'Retry-After':'2'}});
       }
     }
     const index = Number(reader?.[1]);
     const source = url.searchParams.has('mismatch') ? image(1) : image(index);
-    const body = reader ? readerHTML(index, source) : url.pathname === galleryPath ? galleryHTML() : '<title>Search</title>';
+    const body = reader ? readerHTML(index, source) : /^\/g\/(?:777|778|779)\/$/.test(url.pathname)
+      ? galleryHTML() : '<title>Search</title>';
     return route.fulfill({contentType:'text/html; charset=utf-8', body:'<!doctype html><meta charset="utf-8">' + body});
   });
   const open = page.getByRole('button', {name:'直向閱讀器', exact:true});
@@ -139,7 +142,27 @@ async function testNhentai(browser, bundle) {
   assert.equal(await preload.locator('option:checked').textContent(), '使用網站預設（3 頁）');
   await visit(origin + '/search/');
   assert.equal(await open.count(), 0);
+
+  offline = false;
+  rateLimited = false;
+  limitedPath = '/g/778/1/';
+  const other = await context.newPage();
+  await other.goto(origin + '/g/779/');
+  await other.addScriptTag({content:bundle});
+  await visit(origin + '/g/778/');
+  await startPreload.click();
+  const cooldown = await page.waitForFunction(() => {
+    const time = Number(localStorage.getItem('kg1.nhentai-next-request'));
+    return time - Date.now() > 1500 && time;
+  });
+  const retryAt = await cooldown.jsonValue();
   await page.close();
+  await other.getByRole('button', {name:'開始載入', exact:true}).click();
+  await other.getByText('已保存 3 頁 / 共 3 頁', {exact:true}).waitFor({timeout:10000});
+  const started = fetched.filter(({path}) => path.startsWith('/g/779/'));
+  assert.equal(started.length, 3);
+  assert(started[0].at >= retryAt - 50, 'another tab honors Retry-After after the first tab closes');
+  await other.close();
 }
 
 (async () => {
@@ -150,7 +173,7 @@ async function testNhentai(browser, bundle) {
     const bundle = await readFile(path.join(directory, 'komaglide.user.js'), 'utf8');
     browser = await launchSiteBrowser();
     await testNhentai(browser, bundle);
-    console.log('nhentai gallery, direct reader, and offline cache passed');
+    console.log('nhentai gallery, offline cache, and cross-tab cooldown passed');
   } finally {
     await browser?.close();
     await rm(directory, {recursive:true, force:true});

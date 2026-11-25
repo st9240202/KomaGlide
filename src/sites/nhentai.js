@@ -3,46 +3,44 @@ const nhRoute = /^\/g\/([1-9]\d*)(?:\/([1-9]\d*))?\/?$/;
 const nhPageLabel = '.reader-pagination .page-number';
 const nhRequestSpacing = 1200;
 const nhDefaultCooldown = 30_000;
+const nhRequestTimeKey = PREFIX + 'nhentai-next-request';
 let nhNextRequestAt = 0;
 let nhDocumentQueue = Promise.resolve();
 
 async function nhWaitForRequest(signal) {
   signal.throwIfAborted();
   while (nhNextRequestAt > Date.now()) {
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener('abort', cancel);
-        resolve();
-      }, Math.min(nhNextRequestAt - Date.now(), 2_147_483_647));
-      function cancel() {
-        clearTimeout(timer);
-        reject(signal.reason);
-      }
-      signal.addEventListener('abort', cancel, {once:true});
-    });
+    await waitForDelay(Math.min(nhNextRequestAt - Date.now(), 2_147_483_647), signal);
     signal.throwIfAborted();
   }
 }
+async function nhSetRequestTime(time) {
+  nhNextRequestAt = time;
+  await write(nhRequestTimeKey, time).catch(() => {});
+}
 
 function nhFetchDocument(url, signal) {
-  // Pace reader HTML requests across visible pages and preloads. The image
-  // downloads can still run in parallel once their URLs are known.
-  const task = nhDocumentQueue.then(async () => {
+  // Reader HTML is paced across tabs. Images use the site's parallel limit.
+  const task = nhDocumentQueue.then(() => withSiteLock('komaglide-nhentai-document', signal, async () => {
+    const saved = await read(nhRequestTimeKey).catch(() => null);
+    if (Number.isFinite(saved)) nhNextRequestAt = Math.max(nhNextRequestAt, saved);
     for (let attempt = 0; ; attempt++) {
       await nhWaitForRequest(signal);
-      nhNextRequestAt = Date.now() + nhRequestSpacing;
       try {
-        return await fetchDocument(url, signal);
+        return await runSiteRequest(async () => {
+          await nhSetRequestTime(Date.now() + nhRequestSpacing);
+          return readDocument(url, signal);
+        }, signal);
       } catch (error) {
         if (error.status !== 429) throw error;
         const now = Date.now();
         const retryAt = /^\d+$/.test(error.retryAfter)
           ? now + Number(error.retryAfter) * 1000 : Date.parse(error.retryAfter);
-        nhNextRequestAt = Math.max(nhNextRequestAt, Number.isFinite(retryAt) ? retryAt : now + nhDefaultCooldown);
+        await nhSetRequestTime(Math.max(nhNextRequestAt, Number.isFinite(retryAt) ? retryAt : now + nhDefaultCooldown));
         if (attempt > 0) throw error;
       }
     }
-  });
+  }));
   nhDocumentQueue = task.catch(() => {});
   return task;
 }

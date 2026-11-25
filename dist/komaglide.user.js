@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.23
+// @version      0.7.24
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
@@ -1621,12 +1621,14 @@ const hitomiHash = /^[a-f0-9]{64}$/;
 let hitomiGallery;
 let hitomiRouting;
 
-async function hitomiAsset(path) {
-  const response = await fetch(hitomiAssets + path, {
-    credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000)
+function hitomiAsset(path) {
+  return runSiteRequest(async () => {
+    const response = await fetch(hitomiAssets + path, {
+      credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000)
+    });
+    if (!response.ok) throw new Error('Hitomi HTTP ' + response.status);
+    return response.text();
   });
-  if (!response.ok) throw new Error('Hitomi HTTP ' + response.status);
-  return response.text();
 }
 
 function prepareHitomi(root, address, schedule) {
@@ -1868,46 +1870,44 @@ const nhRoute = /^\/g\/([1-9]\d*)(?:\/([1-9]\d*))?\/?$/;
 const nhPageLabel = '.reader-pagination .page-number';
 const nhRequestSpacing = 1200;
 const nhDefaultCooldown = 30_000;
+const nhRequestTimeKey = PREFIX + 'nhentai-next-request';
 let nhNextRequestAt = 0;
 let nhDocumentQueue = Promise.resolve();
 
 async function nhWaitForRequest(signal) {
   signal.throwIfAborted();
   while (nhNextRequestAt > Date.now()) {
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener('abort', cancel);
-        resolve();
-      }, Math.min(nhNextRequestAt - Date.now(), 2_147_483_647));
-      function cancel() {
-        clearTimeout(timer);
-        reject(signal.reason);
-      }
-      signal.addEventListener('abort', cancel, {once:true});
-    });
+    await waitForDelay(Math.min(nhNextRequestAt - Date.now(), 2_147_483_647), signal);
     signal.throwIfAborted();
   }
 }
+async function nhSetRequestTime(time) {
+  nhNextRequestAt = time;
+  await write(nhRequestTimeKey, time).catch(() => {});
+}
 
 function nhFetchDocument(url, signal) {
-  // Pace reader HTML requests across visible pages and preloads. The image
-  // downloads can still run in parallel once their URLs are known.
-  const task = nhDocumentQueue.then(async () => {
+  // Reader HTML is paced across tabs. Images use the site's parallel limit.
+  const task = nhDocumentQueue.then(() => withSiteLock('komaglide-nhentai-document', signal, async () => {
+    const saved = await read(nhRequestTimeKey).catch(() => null);
+    if (Number.isFinite(saved)) nhNextRequestAt = Math.max(nhNextRequestAt, saved);
     for (let attempt = 0; ; attempt++) {
       await nhWaitForRequest(signal);
-      nhNextRequestAt = Date.now() + nhRequestSpacing;
       try {
-        return await fetchDocument(url, signal);
+        return await runSiteRequest(async () => {
+          await nhSetRequestTime(Date.now() + nhRequestSpacing);
+          return readDocument(url, signal);
+        }, signal);
       } catch (error) {
         if (error.status !== 429) throw error;
         const now = Date.now();
         const retryAt = /^\d+$/.test(error.retryAfter)
           ? now + Number(error.retryAfter) * 1000 : Date.parse(error.retryAfter);
-        nhNextRequestAt = Math.max(nhNextRequestAt, Number.isFinite(retryAt) ? retryAt : now + nhDefaultCooldown);
+        await nhSetRequestTime(Math.max(nhNextRequestAt, Number.isFinite(retryAt) ? retryAt : now + nhDefaultCooldown));
         if (attempt > 0) throw error;
       }
     }
-  });
+  }));
   nhDocumentQueue = task.catch(() => {});
   return task;
 }
@@ -2143,7 +2143,7 @@ siteAdapters.push(function detectGeneric(root, address) {
     const key = JSON.stringify([page.site, page.workId, page.chapterId, page.index]);
     if (!inFlightWrites.has(key)) {
       const task = (async () => {
-        const blob = await fetchImage(page);
+        const blob = await runSiteRequest(() => fetchImage(page));
         try {
           const chapterSubtitle = chapterSubtitles.get(page.chapterUrl) ?? page.chapterSubtitle;
           await putPage({...page, chapterSubtitle}, blob);
@@ -3023,7 +3023,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     return root;
   }
 
-  async function fetchDocument(address, signal) {
+  function fetchDocument(address, signal) {
+    return runSiteRequest(() => readDocument(address, signal), signal);
+  }
+  async function readDocument(address, signal) {
     const timeout = AbortSignal.timeout(20_000);
     const response = await fetch(address, {mode:'same-origin', credentials:'same-origin',
       signal:signal ? AbortSignal.any([signal, timeout]) : timeout});
@@ -3087,14 +3090,74 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
   const SITE_PARALLEL_PRELOAD = PARALLEL_PRELOAD + '.' + location.origin;
   const PARALLEL_PRELOAD_CHOICES = [1, 2, 3, 4, 5, 6];
   const DEFAULT_PARALLEL_PRELOAD = 3;
+  const SITE_REQUEST_QUEUE = 'komaglide-site-request-queue';
+  const SITE_REQUEST_SLOTS = PARALLEL_PRELOAD_CHOICES.map(n => 'komaglide-site-request-' + n);
   const READ_AHEAD_PAGES = 3;
   const BUFFER_IDLE_MS = 1200;
-  async function readParallelPreload(chapter) {
-    if (!chapter.parallelPages) return null;
-    const [site, legacy] = await Promise.all([
-      read(SITE_PARALLEL_PRELOAD).catch(() => null), read(PARALLEL_PRELOAD).catch(() => null)
-    ]);
-    return site ?? legacy;
+  let siteRequestDefault = null;
+  let localSiteRequests = Promise.resolve();
+
+  async function readParallelPreload() {
+    return (await read(SITE_PARALLEL_PRELOAD).catch(() => null)) ?? read(PARALLEL_PRELOAD).catch(() => null);
+  }
+  async function siteRequestLimit() {
+    if (siteRequestDefault === null) return 1;
+    const choice = await readParallelPreload();
+    return PARALLEL_PRELOAD_CHOICES.includes(choice) ? choice : siteRequestDefault;
+  }
+  function defaultParallelPreloadFor(chapter) {
+    return PARALLEL_PRELOAD_CHOICES.includes(chapter.defaultParallelPreload)
+      ? chapter.defaultParallelPreload : DEFAULT_PARALLEL_PRELOAD;
+  }
+  function waitForDelay(ms, signal) {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', cancel);
+        resolve();
+      }, ms);
+      function cancel() {
+        clearTimeout(timer);
+        reject(signal.reason);
+      }
+      signal?.addEventListener('abort', cancel, {once:true});
+    });
+  }
+  function withSiteLock(name, signal, work) {
+    return navigator.locks ? navigator.locks.request(name, signal ? {signal} : {}, work) : work();
+  }
+  async function runSiteRequest(request, signal) {
+    const locks = navigator.locks;
+    const work = () => {
+      signal?.throwIfAborted();
+      return request();
+    };
+    if (!locks) {
+      const task = localSiteRequests.then(work);
+      localSiteRequests = task.catch(() => {});
+      return task;
+    }
+    while (true) {
+      let task;
+      // Count every occupied slot under one lock, including requests started
+      // before the user lowered the limit. Closing a tab releases its slots.
+      await withSiteLock(SITE_REQUEST_QUEUE, signal, async () => {
+        const limit = await siteRequestLimit();
+        const {held} = await locks.query();
+        const occupied = new Set(held.map(lock => lock.name).filter(name => SITE_REQUEST_SLOTS.includes(name)));
+        if (occupied.size >= limit) return;
+        const slot = SITE_REQUEST_SLOTS.find(name => !occupied.has(name));
+        let admit;
+        const admitted = new Promise(resolve => { admit = resolve; });
+        task = withSiteLock(slot, signal, () => {
+          admit();
+          return work();
+        });
+        await Promise.race([admitted, task]);
+      });
+      if (task) return task;
+      await waitForDelay(150, signal);
+    }
   }
   function createFlow(root, first, overlay, view = {}) {
     const {onPreloadFinished} = view;
@@ -3123,10 +3186,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     let current = first, busy = false, nearEnd = false, stopped = false;
     let imageTasks = Promise.resolve();
     let bufferMode = view.bufferMode === 'ahead' ? 'ahead' : 'chapter';
-    const defaultParallelPreload = PARALLEL_PRELOAD_CHOICES.includes(first.defaultParallelPreload)
-      ? first.defaultParallelPreload : DEFAULT_PARALLEL_PRELOAD;
+    const defaultParallelPreload = defaultParallelPreloadFor(first);
     const savedParallelPreload = PARALLEL_PRELOAD_CHOICES.includes(view.parallelPreload) ? view.parallelPreload : null;
-    let parallelPreload = savedParallelPreload ?? defaultParallelPreload;
     let bufferScheduled = false, bufferReadyAt = 0, bufferCursor = 0;
     let bufferGroup, bufferPosition, bufferLayout, bufferRevision = 0;
     const bufferAttempts = new WeakMap();
@@ -3265,11 +3326,11 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     async function bufferNextPage() {
       if (stopped) return false;
       if (performance.now() < bufferReadyAt) return true;
+      const limit = group === groups[0] && liveChapter?.parallelPages ? await siteRequestLimit() : 1;
+      if (stopped) return false;
       const full = preload || bufferMode === 'chapter';
       const end = preload ? 0 : lastVisiblePage();
       const count = full ? group.total : Math.min(READ_AHEAD_PAGES, group.total - end);
-      const parallel = group === groups[0] && liveChapter?.parallelPages;
-      const limit = parallel ? parallelPreload : 1;
       const figures = [];
       const start = full ? bufferCursor || end : end;
       // Walk forward from the current spread, then wrap to earlier missing pages.
@@ -3674,11 +3735,9 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
           value: savedParallelPreload ?? 'default',
           defaultValue: defaultParallelPreload,
           choices: PARALLEL_PRELOAD_CHOICES,
-          onChange(value) {
+          async onChange(value) {
             const choice = value === 'default' ? value : Number(value);
-            parallelPreload = choice === 'default' ? defaultParallelPreload : choice;
-            // Let in-flight requests finish. The next batch uses the new limit.
-            void write(SITE_PARALLEL_PRELOAD, choice);
+            await write(SITE_PARALLEL_PRELOAD, choice);
             scheduleBuffer();
           }
         } : null,
@@ -3861,16 +3920,13 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       preloadJob = null;
       updatePreloadStatus();
     }
-    async function startPreload() {
+    function startPreload() {
       if (preloadJob || dialog || !chapter) return;
       const job = {};
       preloadJob = job;
       preloadError = '';
       updatePreloadStatus();
-      const parallelPreload = await readParallelPreload(chapter);
-      if (preloadJob !== job) return;
       job.flow = createFlow(element('div'), chapter, null, {
-        parallelPreload,
         onPreloadFinished(error) {
           preloadError = error;
           stopPreload();
@@ -3883,7 +3939,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       stopPreload();
       dialog = element('dialog');
       dialog.setAttribute('aria-label',t('verticalReader'));
-      const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), readParallelPreload(chapter)]);
+      const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), chapter.parallelPages && readParallelPreload()]);
       const restoreViewport = fitReaderViewport();
       root.append(dialog);
       dialog.showModal();
@@ -4029,6 +4085,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     function scan() {
       const chapter = detectChapter();
       if (!chapter) return;
+      siteRequestDefault = chapter.parallelPages ? defaultParallelPreloadFor(chapter) : null;
       hasNativePager = Boolean(chapter.resolvePage);
       pageLabelSelector = chapter.pageLabelSelector;
       if (!controls) {
