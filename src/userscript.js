@@ -173,6 +173,11 @@
     if (manhuaguiOrigins.has(location.origin) &&
         location.pathname === '/comic/' + page.workId + '/' + page.chapterId + '.html' &&
         manhuaguiImageUrl(url, location)) return fetchPublicImage(url, location.origin);
+    if (manhuapiSite(location) && manhuapiChapterRoute.test(location.pathname)) {
+      const chapter = new URL(page.chapterUrl);
+      if (chapter.origin === location.origin && manhuapiChapterRoute.exec(chapter.pathname)?.[1] === page.chapterId &&
+          manhuapiImageUrl(url, location)) return fetchPublicImage(url, location.origin);
+    }
     if (['https://img7.8comic.com', 'https://img9.8comic.com'].includes(url.origin)) {
       const canonical = new URL(page.chapterUrl);
       const fallback = canonical.origin === location.origin && canonical.pathname === location.pathname
@@ -1288,7 +1293,8 @@
         inlineFlow = null;
         inlineHost?.remove();
         if (!value.nextPage && !value.nextChapter) return;
-        const last = value.entries[value.entries.length-1].img;
+        const last = value.entries.at(-1)?.img;
+        if (!last?.isConnected) return;
         const anchor = last.closest('.webcomic-page,[data-comic-pages],#comic,.comic-pages,#comic-pages,#comicpage') ||
           last.closest('picture,a') || last;
         inlineHost = element('div');
