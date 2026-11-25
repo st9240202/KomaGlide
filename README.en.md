@@ -31,7 +31,7 @@ Select **Vertical Reader** on a comic page to use vertical scroll, single-page, 
 
 On desktop Manhuagui, the site's page selector and continuous scrolling are supported. When the selector is on page 1, images loaded as you scroll are saved using the page numbers below them. On mobile, open a chapter from the list, then choose Start Preload to save the chapter or Vertical Reader to read it.
 
-Built-in site detection covers xkcd, Pepper&Carrot, selected 8comic reader pages, desktop and mobile reader pages on Manhuagui, and gallery and reader pages on nhentai.net. The limit per cached image is 32 MiB.
+Built-in site detection covers xkcd, Pepper&Carrot, selected 8comic reader pages, desktop and mobile reader pages on Manhuagui, and gallery and reader pages on nhentai.net and Hitomi.la. The limit per cached image is 32 MiB.
 
 ## Build
 

@@ -1399,6 +1399,7 @@
     }).observe(document.documentElement, {subtree:true, childList:true, attributes:true, attributeFilter:['src','srcset']});
     window.addEventListener('popstate', schedule);
     window.addEventListener('hashchange', schedule);
+    prepareHitomi(new URL(location.href), schedule);
     scan();
   }
 
