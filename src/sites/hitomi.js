@@ -1,7 +1,7 @@
 const hitomiOrigin = 'https://hitomi.la';
 const hitomiAssets = 'https://ltn.gold-usergeneratedcontent.net';
 const hitomiReaderRoute = /^\/reader\/([1-9]\d*)\.html$/;
-const hitomiGalleryRoute = /^\/(?:galleries\/|(?:doujinshi|dj|manga|cg|imageset|anime)\/[^/]+-)([1-9]\d*)\.html$/;
+const hitomiGalleryRoute = /^\/(?:galleries\/|(?:[^/]+\/)+[^/]+-)([1-9]\d*)\.html$/;
 const hitomiHash = /^[a-f0-9]{64}$/;
 let hitomiGallery;
 let hitomiRouting;
@@ -14,12 +14,24 @@ async function hitomiAsset(path) {
   return response.text();
 }
 
-function prepareHitomi(address, schedule) {
+function prepareHitomi(root, address, schedule) {
   if (address.origin !== hitomiOrigin) return;
-  const route = hitomiReaderRoute.exec(address.pathname) || hitomiGalleryRoute.exec(address.pathname);
+  const reader = hitomiReaderRoute.exec(address.pathname);
+  const route = reader || hitomiGalleryRoute.exec(address.pathname);
   if (!route) return;
   const id = route[1];
-  void hitomiAsset('/galleries/' + id + '.js').then(source => {
+  const metadataPath = '/galleries/' + id + '.js';
+  if (!reader && address.pathname !== '/galleries/' + id + '.html') {
+    // Category names can change. Confirm that this document describes the same gallery.
+    const matchingAsset = [...root.querySelectorAll('script[src*="/galleries/"]')].some(script =>
+      webUrl(script.getAttribute('src'), address)?.href === hitomiAssets + metadataPath);
+    const matchingReader = [...root.querySelectorAll('.gallery a[href*="/reader/"]')].some(anchor => {
+      const url = webUrl(anchor.getAttribute('href'), address);
+      return url?.origin === address.origin && hitomiReaderRoute.exec(url.pathname)?.[1] === id;
+    });
+    if (!matchingAsset && !matchingReader) return;
+  }
+  void hitomiAsset(metadataPath).then(source => {
     // The published asset wraps a JSON object in a script assignment.
     const payload = /^\s*var\s+galleryinfo\s*=\s*(\{[\s\S]*\})\s*;?\s*$/.exec(source);
     if (!payload) return;

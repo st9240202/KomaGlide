@@ -5,7 +5,9 @@ const { launchSiteBrowser, readSavedChapter } = require('./site-fixture.cjs');
 
 const origin = 'https://hitomi.la';
 const assets = 'https://ltn.gold-usergeneratedcontent.net';
-const gallery = '/doujinshi/fixture-title-777.html';
+const gallery = '/unlisted-category/fixture-title-777.html';
+const nestedGallery = '/another-category/localized/other-title-777.html';
+const tag = '/tag/fixture-title-777.html';
 const reader = '/reader/777.html';
 const hashes = ['a'.repeat(61) + 'abc', 'b'.repeat(61) + '12f', 'c'.repeat(61) + '301'];
 const images = hashes.map((hash, i) => 'https://w' + [2, 1, 1][i] + '.gold-usergeneratedcontent.net/1234567890/' +
@@ -37,13 +39,19 @@ async function run() {
     });
     let imageFetches = [];
     let routingReads = 0;
+    let metadataReads = 0;
     let cachedOnly = false;
     const cors = {'access-control-allow-origin': '*'};
     await page.route(/^https:\/\//, route => {
       const url = route.request().url();
-      if (url === origin + '/all.html') return route.fulfill({contentType: 'text/html', body: '<a href="' + gallery + '">Catalog</a>'});
-      if (url === origin + gallery || url === origin + '/galleries/777.html') {
-        return route.fulfill({contentType: 'text/html', body: '<h1>Fixture Title</h1><a href="' + reader + '">Read</a>'});
+      if (url === origin + '/all.html' || url === origin + tag) {
+        return route.fulfill({contentType: 'text/html', body: '<a href="' + gallery + '">Catalog</a><a href="' + reader + '">Read</a>'});
+      }
+      if (url === origin + gallery) {
+        return route.fulfill({contentType: 'text/html', body: '<main class="gallery"><h1>Fixture Title</h1><a href="' + reader + '">Read</a></main>'});
+      }
+      if (url === origin + nestedGallery || url === origin + '/galleries/777.html') {
+        return route.fulfill({contentType: 'text/html', body: '<script src="' + assets + '/galleries/777.js"></script><h1>Fixture Title</h1>'});
       }
       if (url === origin + reader) {
         return route.fulfill({contentType: 'text/html', body: '<div id="mobileImages"><picture>' +
@@ -51,6 +59,7 @@ async function run() {
           '<div id="preload"><img class="lillie" src="' + images[2] + '"></div>'});
       }
       if (url === assets + '/galleries/777.js') {
+        if (route.request().resourceType() === 'fetch') metadataReads++;
         const data = {id: '777', title: 'Fixture Title', galleryurl: gallery, files: hashes.map(hash => ({hash}))};
         return route.fulfill({headers: cors, body: 'var galleryinfo = ' + JSON.stringify(data) + ';'});
       }
@@ -72,6 +81,8 @@ async function run() {
     const readerButton = page.getByRole('button', {name: '直向閱讀器', exact: true});
     await open('/all.html');
     assert.equal(await readerButton.count(), 0);
+    await open(tag);
+    assert.equal(await readerButton.count(), 0);
     await open(reader + '#2-3');
     await counts(1).waitFor();
     assert.deepEqual((await readSavedChapter(page, '777', '777')).pages.map(row => row.index), [2]);
@@ -88,6 +99,10 @@ async function run() {
     const saved = await readSavedChapter(page, '777', '777');
     assert.equal(saved.chapter.chapterUrl, origin + gallery);
     assert.deepEqual(saved.pages.map(row => row.index), [1, 2, 3]);
+    assert.equal(metadataReads, 2, 'catalog and tag pages must not fetch gallery metadata');
+
+    await open(nestedGallery);
+    await counts(3).waitFor();
 
     cachedOnly = true;
     imageFetches = [];

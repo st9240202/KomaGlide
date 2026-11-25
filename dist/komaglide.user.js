@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.22
+// @version      0.7.23
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
@@ -1616,7 +1616,7 @@ siteAdapters.push(function detectEHentai(root, address) {
 const hitomiOrigin = 'https://hitomi.la';
 const hitomiAssets = 'https://ltn.gold-usergeneratedcontent.net';
 const hitomiReaderRoute = /^\/reader\/([1-9]\d*)\.html$/;
-const hitomiGalleryRoute = /^\/(?:galleries\/|(?:doujinshi|dj|manga|cg|imageset|anime)\/[^/]+-)([1-9]\d*)\.html$/;
+const hitomiGalleryRoute = /^\/(?:galleries\/|(?:[^/]+\/)+[^/]+-)([1-9]\d*)\.html$/;
 const hitomiHash = /^[a-f0-9]{64}$/;
 let hitomiGallery;
 let hitomiRouting;
@@ -1629,12 +1629,24 @@ async function hitomiAsset(path) {
   return response.text();
 }
 
-function prepareHitomi(address, schedule) {
+function prepareHitomi(root, address, schedule) {
   if (address.origin !== hitomiOrigin) return;
-  const route = hitomiReaderRoute.exec(address.pathname) || hitomiGalleryRoute.exec(address.pathname);
+  const reader = hitomiReaderRoute.exec(address.pathname);
+  const route = reader || hitomiGalleryRoute.exec(address.pathname);
   if (!route) return;
   const id = route[1];
-  void hitomiAsset('/galleries/' + id + '.js').then(source => {
+  const metadataPath = '/galleries/' + id + '.js';
+  if (!reader && address.pathname !== '/galleries/' + id + '.html') {
+    // Category names can change. Confirm that this document describes the same gallery.
+    const matchingAsset = [...root.querySelectorAll('script[src*="/galleries/"]')].some(script =>
+      webUrl(script.getAttribute('src'), address)?.href === hitomiAssets + metadataPath);
+    const matchingReader = [...root.querySelectorAll('.gallery a[href*="/reader/"]')].some(anchor => {
+      const url = webUrl(anchor.getAttribute('href'), address);
+      return url?.origin === address.origin && hitomiReaderRoute.exec(url.pathname)?.[1] === id;
+    });
+    if (!matchingAsset && !matchingReader) return;
+  }
+  void hitomiAsset(metadataPath).then(source => {
     // The published asset wraps a JSON object in a script assignment.
     const payload = /^\s*var\s+galleryinfo\s*=\s*(\{[\s\S]*\})\s*;?\s*$/.exec(source);
     if (!payload) return;
@@ -4070,7 +4082,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     }).observe(document.documentElement, {subtree:true, childList:true, attributes:true, attributeFilter:['src','srcset']});
     window.addEventListener('popstate', schedule);
     window.addEventListener('hashchange', schedule);
-    prepareHitomi(new URL(location.href), schedule);
+    prepareHitomi(document, new URL(location.href), schedule);
     scan();
   }
 
