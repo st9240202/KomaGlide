@@ -58,6 +58,50 @@ function installGM(pngData) {
   };
 }
 
+async function testChapterContinuation(browser, bundle) {
+  const page = await browser.newPage();
+  try {
+    const first = chapterUrl.replace("ch=1", "ch=2a");
+    const final = chapterUrl.replace("ch=1", "ch=2b");
+    const destination = final + "&ccTheme=night#?ch=2b&rpkey=session";
+    await page.addInitScript({
+      content: '(' + installGM.toString() + ')(' + JSON.stringify(png.toString("base64")) + ');\n' + bundle,
+    });
+    await page.route(/^https?:\/\//, route => {
+      const request = route.request();
+      if (request.resourceType() !== "document") return route.fulfill({contentType:"image/png", body:png});
+      const initial = new URL(request.url()).searchParams.get("ch") === "2a";
+      const token = initial ? "2a" : "2b";
+      return route.fulfill({contentType:"text/html; charset=utf-8", body:
+        '<!doctype html><meta charset="utf-8"><li class="view-titles"><a href="https://www.8comic.com/html/23337.html">' +
+        'Fixture <small>第2集</small><small>(1P)</small></a></li><a id="nextvol">下一集</a>' +
+        '<div class="pinch-zoom">' + slot(1, imageUrl(1).replace("/1/", "/" + token + "/")) + '</div>' +
+        '<script>window.ch = 2; window.chs = 3; window.ni = "2b"; window.reurl = () => ' +
+        JSON.stringify(destination) + ';</script>'});
+    });
+    await page.goto(first);
+    await page.getByRole("button", {name:"直向閱讀器", exact:true}).click();
+    const reader = page.getByRole("dialog", {name:"直向閱讀器", exact:true});
+    const image = reader.locator("figure img");
+    await image.evaluate(img => img.decode());
+    // The whole page fits in the viewport. A forward gesture at the bottom
+    // must respect the default-off setting even though the next URL is known.
+    await reader.dispatchEvent("wheel", {deltaY:200});
+    assert.equal(page.url(), first);
+    await reader.getByRole("button", {name:"閱讀設定"}).click();
+    await reader.getByRole("checkbox", {name:"自動接下一話"}).click();
+    await page.waitForURL(destination);
+    await reader.waitFor();
+    assert.equal(await reader.locator(".source-chapter-title").textContent(), "第2集（2b）");
+    assert.equal(await page.evaluate(() => sessionStorage.getItem("kg1.reader-continuation")), null);
+    await reader.getByRole("button", {name:"頁面導覽"}).click();
+    assert.equal(await reader.getByRole("button", {name:"接上下一話"}).count(), 0);
+    await page.reload();
+    await page.getByRole("button", {name:"直向閱讀器", exact:true}).waitFor();
+    assert.equal(await reader.count(), 0, "refresh must not reuse the one-shot continuation");
+  } finally { await page.close(); }
+}
+
 async function run() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "komaglide-8comic-"));
   let bundle;
@@ -205,7 +249,8 @@ async function run() {
       assert.deepEqual(fetches, urls);
       assert.deepEqual(await page.evaluate(() => window.privileged), []);
     }
-    console.log("8comic chapter identity, lazy loading, cold reader, cached reread, page order, exclusions and image transport passed");
+    await testChapterContinuation(browser, bundle);
+    console.log("8comic chapter identity, lazy loading, reader and cache, image transport and chapter continuation passed");
   } finally { await browser.close(); }
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

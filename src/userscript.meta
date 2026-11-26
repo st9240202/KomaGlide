@@ -18,6 +18,7 @@
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @connect      imgs.xkcd.com
 // @connect      img7.8comic.com
 // @connect      img9.8comic.com

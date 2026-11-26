@@ -18,6 +18,7 @@
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @connect      imgs.xkcd.com
 // @connect      img7.8comic.com
 // @connect      img9.8comic.com
@@ -1454,7 +1455,25 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
   }
 
   const siteAdapters = [];
-  siteAdapters.push(function detect8comic(root, address) {
+  function nextComic8Chapter(root, address, chapterToken) {
+  if (root !== document || !root.querySelector('#nextvol')) return null;
+  const site = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
+  const next = String(site.ni ?? '');
+  if (!/^\d+(?:\.\d+|[a-z])?$/i.test(next) || next === chapterToken ||
+      !(Number(site.ch) < Number(site.chs)) || typeof site.reurl !== 'function') return null;
+  let url;
+  try {
+    url = webUrl(site.reurl('ch', next), address);
+  } catch {
+    return null;
+  }
+  if (url?.origin !== address.origin || url.pathname !== address.pathname || url.searchParams.get('ch') !== next) return null;
+  const chapterUrl = new URL(address.pathname, address.origin);
+  chapterUrl.searchParams.set('ch', next);
+  return {url:url.href, chapterUrl:chapterUrl.href};
+}
+
+siteAdapters.push(function detect8comic(root, address) {
   const route = /^\/online\/new-(\d+)\.html$/.exec(address.pathname);
   if (address.origin !== 'https://articles.onemoreplace.tw' || !route) return null;
 
@@ -1505,6 +1524,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
     workId, workTitle, chapterId: workId + ':' + chapterToken, chapterTitle, chapterUrl: chapterUrl.href,
     total, entries: [...pages.values()].sort((a, b) => a.index - b.index),
     revealPage: root === document ? revealPage : undefined,
+    nextChapterNavigation: nextComic8Chapter(root, address, chapterToken),
     nextPage: null, nextChapter: null,
   };
 });
@@ -1725,6 +1745,59 @@ siteAdapters.push(function detectHitomi(root, address) {
 const manhuaguiImages = new WeakMap();
 const manhuaguiOrigins = new Set(['https://tw.manhuagui.com', 'https://m.manhuagui.com']);
 const manhuaguiRoute = /^\/comic\/(\d+)\/(\d+)\.html$/;
+const mobileManhuaguiConfig = new WeakMap();
+
+function readMobileManhuaguiConfig(root, site) {
+  if (mobileManhuaguiConfig.has(root)) return mobileManhuaguiConfig.get(root);
+  // The mobile reader keeps its settings inside SMH.reader. Read the inline
+  // argument as data. The site's dictionary decoder does not execute the packer.
+  const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (const script of root.querySelectorAll('script:not([src])')) {
+    const source = script.textContent;
+    if (source.length > 128_000 || !source.includes('function(p,a,c,k,e,d)')) continue;
+    const packet = /\}\('([^']*)',(\d{1,2}),(\d{1,4}),'([^']*)'\[/.exec(source);
+    if (!packet) continue;
+    const [, packed, base, count, dictionary] = packet;
+    const radix = Number(base);
+    if (radix < 2 || radix > alphabet.length) continue;
+    try {
+      const unpacked = dictionary.includes('|') ? dictionary : site.LZString?.decompressFromBase64(dictionary);
+      const words = unpacked?.split('|');
+      if (words?.length !== Number(count)) continue;
+      const data = packed.replace(/\b[0-9a-zA-Z]+\b/g, token => {
+        let index = 0;
+        for (const char of token) {
+          const digit = alphabet.indexOf(char);
+          if (digit >= radix) return token;
+          index = index * radix + digit;
+          if (index >= words.length) return token;
+        }
+        return words[index] || token;
+      });
+      const json = /^SMH\.reader\((\{[\s\S]*\})\)\.preInit\(\);?$/.exec(data)?.[1];
+      if (!json) continue;
+      const {bookId, chapterId, nextId} = JSON.parse(json);
+      const config = {bookId, chapterId, nextId};
+      mobileManhuaguiConfig.set(root, config);
+      return config;
+    } catch {
+      // An unrecognized packet should not affect normal reading.
+    }
+  }
+  return null;
+}
+
+function nextManhuaguiChapter(root, address, workId, chapterId, mobile) {
+  const site = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
+  const config = mobile ? readMobileManhuaguiConfig(root, site) : site.cInfo;
+  const book = mobile ? config?.bookId : config?.bid;
+  const chapter = mobile ? config?.chapterId : config?.cid;
+  const next = Number(config?.nextId);
+  if (String(book) !== workId || String(chapter) !== chapterId ||
+      !Number.isSafeInteger(next) || next <= 0 || String(next) === chapterId) return null;
+  const chapterUrl = new URL('/comic/' + workId + '/' + next + '.html', address).href;
+  return {url:chapterUrl, chapterUrl};
+}
 
 function manhuaguiImageUrl(value, base) {
   const url = webUrl(value, base);
@@ -1812,7 +1885,8 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
   const start = hashPage();
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl:address.origin + address.pathname,
     total, entries:entry ? [entry] : [], startIndex:Number.isSafeInteger(start) && start >= 1 && start <= total ? start : 1,
-    pageLabelSelector:'#pageNo', resolvePage, nextPage:null, nextChapter:null};
+    pageLabelSelector:'#pageNo', resolvePage, nextPage:null, nextChapter:null,
+    nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, true)};
 }
 
 siteAdapters.push(function detectManhuagui(root, address) {
@@ -1863,7 +1937,8 @@ siteAdapters.push(function detectManhuagui(root, address) {
     if (entry) entries.set(index, entry);
   }
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl: address.origin + address.pathname,
-    total, entries: [...entries.values()], pageLabelSelector, resolvePage, nextPage: null, nextChapter: null};
+    total, entries: [...entries.values()], pageLabelSelector, resolvePage, nextPage: null, nextChapter: null,
+    nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, false)};
 });
 
 const manhuapiChapterRoute = /^\/chapter\/([1-9]\d*)\.html$/;
@@ -3120,6 +3195,18 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
   }
 
   const AUTO = PREFIX + 'auto-next-chapter';
+  const CONTINUATION = PREFIX + 'reader-continuation';
+  function takeReaderContinuation() {
+    try {
+      const pending = sessionStorage.getItem(CONTINUATION);
+      if (!pending) return null;
+      sessionStorage.removeItem(CONTINUATION);
+      const {chapterUrl, expiresAt} = JSON.parse(pending);
+      return Date.now() < expiresAt ? chapterUrl : null;
+    } catch {
+      return null;
+    }
+  }
   let autoNext = false;
   const settingsChanged = new EventTarget();
   function applyAuto(value) {
@@ -3240,6 +3327,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     let tapToTurn = view.tapToTurn !== false;
     let thumbnailSize = ['small', 'large'].includes(view.thumbnailSize) ? view.thumbnailSize : 'medium';
     let current = first, busy = false, nearEnd = false, stopped = false;
+    let forwardGesture = false, navigating = false;
     let imageTasks = Promise.resolve();
     let bufferMode = view.bufferMode === 'ahead' ? 'ahead' : 'chapter';
     const defaultParallelPreload = defaultParallelPreloadFor(first);
@@ -3687,6 +3775,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     function target() {
       if (current.nextPage && !visited.has(current.nextPage)) return {url:current.nextPage, same:true};
       if (current.nextChapter && !visited.has(current.nextChapter)) return {url:current.nextChapter, same:false};
+      if (overlay && liveChapter?.nextChapterNavigation) return {navigation:liveChapter.nextChapterNavigation};
       return null;
     }
     function renderEnd() {
@@ -3697,12 +3786,12 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       const loadedNext = paged && groups.indexOf(group) < groups.length - 1;
       previousGroup.hidden = !paged || groups.indexOf(group) < 1 || position > (mode === 'double' ? 2 : 1);
       nextButton.textContent = loadedNext ? t('nextChapter') : next?.same ? t('continuePage') : t('continueChapter');
-      nextButton.disabled = busy;
+      nextButton.disabled = busy || navigating;
       nextButton.hidden = !atEnd || (!loadedNext && !next);
       chapterActions.hidden = previousGroup.hidden && nextButton.hidden && !message.textContent;
     }
     async function appendNext(background = false) {
-      if (stopped || busy) return;
+      if (stopped || busy || navigating) return;
       if (overlay && mode !== 'scroll' && groups.indexOf(group) < groups.length - 1) {
         group = groups[groups.indexOf(group) + 1];
         position = 1;
@@ -3715,6 +3804,13 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       message.textContent = t('connecting');
       renderEnd();
       try {
+        if (next.navigation) {
+          const {url, chapterUrl} = next.navigation;
+          sessionStorage.setItem(CONTINUATION, JSON.stringify({chapterUrl, expiresAt:Date.now() + 60_000}));
+          location.assign(url);
+          navigating = true;
+          return;
+        }
         let chapter = await fetchChapter(next.url, controller.signal);
         if (stopped) return;
         visited.add(next.url);
@@ -3754,7 +3850,17 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       }
     }
     function maybeContinue() {
-      if ((!overlay || mode === 'scroll') && nearEnd && !message.textContent && (target()?.same || autoNext)) void appendNext();
+      if ((overlay && mode !== 'scroll') || !nearEnd || message.textContent) return;
+      const next = target();
+      if (!next || (!next.same && !autoNext)) return;
+      if (next.navigation) {
+        // A native chapter change replaces the document, so wait until the last
+        // image has loaded and its bottom is in view.
+        const lastImage = group.figures.get(group.total)?.querySelector('img');
+        if (!lastImage?.complete || !lastImage.naturalWidth || (!overlay.scrollTop && !forwardGesture) ||
+            endMarker.getBoundingClientRect().bottom > overlay.getBoundingClientRect().bottom + 1) return;
+      }
+      void appendNext();
     }
     const boundary = new IntersectionObserver(changes => {
       nearEnd = changes[changes.length-1].isIntersecting;
@@ -3831,9 +3937,24 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       const clearScrollAnchor = () => { scrollAnchor = null; if (mode === 'scroll') restartBuffer(); };
       const scrollInput = {passive:true, signal:controller.signal};
       for (const type of ['wheel', 'touchmove']) overlay.addEventListener(type, clearScrollAnchor, scrollInput);
+      const checkNativeEnd = () => {
+        if (liveChapter?.nextChapterNavigation) maybeContinue();
+      };
+      const readPastEnd = () => { forwardGesture = true; checkNativeEnd(); };
+      overlay.addEventListener('wheel', event => { if (event.deltaY > 0) readPastEnd(); }, scrollInput);
+      overlay.addEventListener('touchmove', readPastEnd, scrollInput);
       overlay.addEventListener('keydown', event => {
         if (['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) clearScrollAnchor();
+        if (['ArrowDown','PageDown','End'].includes(event.key) || (event.key === ' ' && !event.shiftKey)) readPastEnd();
       }, scrollInput);
+      pane.addEventListener('load', checkNativeEnd, {capture:true, signal:controller.signal});
+      window.addEventListener('pageshow', event => {
+        if (!event.persisted || !navigating) return;
+        navigating = false;
+        message.textContent = '';
+        // Close the restored overlay so Back stays on the chapter just left.
+        overlay.close();
+      }, {signal:controller.signal});
       overlay.addEventListener('pointerdown', event => {
         if (event.target === overlay) clearScrollAnchor();
       }, scrollInput);
@@ -3844,6 +3965,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
           if (mode === 'scroll' && !stopped) {
             firstVisible();
             syncControls();
+            checkNativeEnd();
           }
         });
       }, {passive:true, signal:controller.signal});
@@ -3863,12 +3985,17 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (sourceScroll && liveChapter) window.scrollTo(sourceScroll);
     }
     function refreshSource(chapter) {
+      const previousNavigation = liveChapter?.nextChapterNavigation?.url;
       liveChapter = chapter.workId === first.workId && chapter.chapterId === first.chapterId ? chapter : null;
       if (liveChapter) {
         const section = groups[0];
         const subtitleChanged = section.chapter.chapterSubtitle !== liveChapter.chapterSubtitle;
         section.chapter.chapterSubtitle = liveChapter.chapterSubtitle;
         if (mergePages(section, liveChapter) || subtitleChanged) updateView();
+      }
+      if (previousNavigation !== liveChapter?.nextChapterNavigation?.url) {
+        renderEnd();
+        maybeContinue();
       }
       checkNativeBuffer?.();
     }
@@ -4015,6 +4142,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     }
     GM_registerMenuCommand(t('verticalReader'), openReader);
     return {
+      openReader,
       update(value) {
         const changed = chapter?.chapterId !== value.chapterId || chapter?.workId !== value.workId;
         chapter = value;
@@ -4044,6 +4172,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
   }
 
   function runSource() {
+    let continuation = takeReaderContinuation();
     const saved = new Set();
     const failures = new Map();
     const queue = [];
@@ -4159,6 +4288,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       }
       syncSubtitle(chapter);
       controls.update(chapter);
+      if (continuation === chapter.chapterUrl) {
+        continuation = null;
+        void controls.openReader();
+      }
       for (const entry of chapter.entries) {
         const {img, index} = entry;
         if (!img.complete || !img.naturalWidth || (img.naturalWidth <= 2 && img.naturalHeight <= 2)) continue;

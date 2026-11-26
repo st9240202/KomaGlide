@@ -386,6 +386,18 @@
   }
 
   const AUTO = PREFIX + 'auto-next-chapter';
+  const CONTINUATION = PREFIX + 'reader-continuation';
+  function takeReaderContinuation() {
+    try {
+      const pending = sessionStorage.getItem(CONTINUATION);
+      if (!pending) return null;
+      sessionStorage.removeItem(CONTINUATION);
+      const {chapterUrl, expiresAt} = JSON.parse(pending);
+      return Date.now() < expiresAt ? chapterUrl : null;
+    } catch {
+      return null;
+    }
+  }
   let autoNext = false;
   const settingsChanged = new EventTarget();
   function applyAuto(value) {
@@ -506,6 +518,7 @@
     let tapToTurn = view.tapToTurn !== false;
     let thumbnailSize = ['small', 'large'].includes(view.thumbnailSize) ? view.thumbnailSize : 'medium';
     let current = first, busy = false, nearEnd = false, stopped = false;
+    let forwardGesture = false, navigating = false;
     let imageTasks = Promise.resolve();
     let bufferMode = view.bufferMode === 'ahead' ? 'ahead' : 'chapter';
     const defaultParallelPreload = defaultParallelPreloadFor(first);
@@ -953,6 +966,7 @@
     function target() {
       if (current.nextPage && !visited.has(current.nextPage)) return {url:current.nextPage, same:true};
       if (current.nextChapter && !visited.has(current.nextChapter)) return {url:current.nextChapter, same:false};
+      if (overlay && liveChapter?.nextChapterNavigation) return {navigation:liveChapter.nextChapterNavigation};
       return null;
     }
     function renderEnd() {
@@ -963,12 +977,12 @@
       const loadedNext = paged && groups.indexOf(group) < groups.length - 1;
       previousGroup.hidden = !paged || groups.indexOf(group) < 1 || position > (mode === 'double' ? 2 : 1);
       nextButton.textContent = loadedNext ? t('nextChapter') : next?.same ? t('continuePage') : t('continueChapter');
-      nextButton.disabled = busy;
+      nextButton.disabled = busy || navigating;
       nextButton.hidden = !atEnd || (!loadedNext && !next);
       chapterActions.hidden = previousGroup.hidden && nextButton.hidden && !message.textContent;
     }
     async function appendNext(background = false) {
-      if (stopped || busy) return;
+      if (stopped || busy || navigating) return;
       if (overlay && mode !== 'scroll' && groups.indexOf(group) < groups.length - 1) {
         group = groups[groups.indexOf(group) + 1];
         position = 1;
@@ -981,6 +995,13 @@
       message.textContent = t('connecting');
       renderEnd();
       try {
+        if (next.navigation) {
+          const {url, chapterUrl} = next.navigation;
+          sessionStorage.setItem(CONTINUATION, JSON.stringify({chapterUrl, expiresAt:Date.now() + 60_000}));
+          location.assign(url);
+          navigating = true;
+          return;
+        }
         let chapter = await fetchChapter(next.url, controller.signal);
         if (stopped) return;
         visited.add(next.url);
@@ -1020,7 +1041,17 @@
       }
     }
     function maybeContinue() {
-      if ((!overlay || mode === 'scroll') && nearEnd && !message.textContent && (target()?.same || autoNext)) void appendNext();
+      if ((overlay && mode !== 'scroll') || !nearEnd || message.textContent) return;
+      const next = target();
+      if (!next || (!next.same && !autoNext)) return;
+      if (next.navigation) {
+        // A native chapter change replaces the document, so wait until the last
+        // image has loaded and its bottom is in view.
+        const lastImage = group.figures.get(group.total)?.querySelector('img');
+        if (!lastImage?.complete || !lastImage.naturalWidth || (!overlay.scrollTop && !forwardGesture) ||
+            endMarker.getBoundingClientRect().bottom > overlay.getBoundingClientRect().bottom + 1) return;
+      }
+      void appendNext();
     }
     const boundary = new IntersectionObserver(changes => {
       nearEnd = changes[changes.length-1].isIntersecting;
@@ -1097,9 +1128,24 @@
       const clearScrollAnchor = () => { scrollAnchor = null; if (mode === 'scroll') restartBuffer(); };
       const scrollInput = {passive:true, signal:controller.signal};
       for (const type of ['wheel', 'touchmove']) overlay.addEventListener(type, clearScrollAnchor, scrollInput);
+      const checkNativeEnd = () => {
+        if (liveChapter?.nextChapterNavigation) maybeContinue();
+      };
+      const readPastEnd = () => { forwardGesture = true; checkNativeEnd(); };
+      overlay.addEventListener('wheel', event => { if (event.deltaY > 0) readPastEnd(); }, scrollInput);
+      overlay.addEventListener('touchmove', readPastEnd, scrollInput);
       overlay.addEventListener('keydown', event => {
         if (['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) clearScrollAnchor();
+        if (['ArrowDown','PageDown','End'].includes(event.key) || (event.key === ' ' && !event.shiftKey)) readPastEnd();
       }, scrollInput);
+      pane.addEventListener('load', checkNativeEnd, {capture:true, signal:controller.signal});
+      window.addEventListener('pageshow', event => {
+        if (!event.persisted || !navigating) return;
+        navigating = false;
+        message.textContent = '';
+        // Close the restored overlay so Back stays on the chapter just left.
+        overlay.close();
+      }, {signal:controller.signal});
       overlay.addEventListener('pointerdown', event => {
         if (event.target === overlay) clearScrollAnchor();
       }, scrollInput);
@@ -1110,6 +1156,7 @@
           if (mode === 'scroll' && !stopped) {
             firstVisible();
             syncControls();
+            checkNativeEnd();
           }
         });
       }, {passive:true, signal:controller.signal});
@@ -1129,12 +1176,17 @@
       if (sourceScroll && liveChapter) window.scrollTo(sourceScroll);
     }
     function refreshSource(chapter) {
+      const previousNavigation = liveChapter?.nextChapterNavigation?.url;
       liveChapter = chapter.workId === first.workId && chapter.chapterId === first.chapterId ? chapter : null;
       if (liveChapter) {
         const section = groups[0];
         const subtitleChanged = section.chapter.chapterSubtitle !== liveChapter.chapterSubtitle;
         section.chapter.chapterSubtitle = liveChapter.chapterSubtitle;
         if (mergePages(section, liveChapter) || subtitleChanged) updateView();
+      }
+      if (previousNavigation !== liveChapter?.nextChapterNavigation?.url) {
+        renderEnd();
+        maybeContinue();
       }
       checkNativeBuffer?.();
     }
@@ -1281,6 +1333,7 @@
     }
     GM_registerMenuCommand(t('verticalReader'), openReader);
     return {
+      openReader,
       update(value) {
         const changed = chapter?.chapterId !== value.chapterId || chapter?.workId !== value.workId;
         chapter = value;
@@ -1310,6 +1363,7 @@
   }
 
   function runSource() {
+    let continuation = takeReaderContinuation();
     const saved = new Set();
     const failures = new Map();
     const queue = [];
@@ -1425,6 +1479,10 @@
       }
       syncSubtitle(chapter);
       controls.update(chapter);
+      if (continuation === chapter.chapterUrl) {
+        continuation = null;
+        void controls.openReader();
+      }
       for (const entry of chapter.entries) {
         const {img, index} = entry;
         if (!img.complete || !img.naturalWidth || (img.naturalWidth <= 2 && img.naturalHeight <= 2)) continue;

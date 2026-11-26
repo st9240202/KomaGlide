@@ -1,3 +1,21 @@
+function nextComic8Chapter(root, address, chapterToken) {
+  if (root !== document || !root.querySelector('#nextvol')) return null;
+  const site = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
+  const next = String(site.ni ?? '');
+  if (!/^\d+(?:\.\d+|[a-z])?$/i.test(next) || next === chapterToken ||
+      !(Number(site.ch) < Number(site.chs)) || typeof site.reurl !== 'function') return null;
+  let url;
+  try {
+    url = webUrl(site.reurl('ch', next), address);
+  } catch {
+    return null;
+  }
+  if (url?.origin !== address.origin || url.pathname !== address.pathname || url.searchParams.get('ch') !== next) return null;
+  const chapterUrl = new URL(address.pathname, address.origin);
+  chapterUrl.searchParams.set('ch', next);
+  return {url:url.href, chapterUrl:chapterUrl.href};
+}
+
 siteAdapters.push(function detect8comic(root, address) {
   const route = /^\/online\/new-(\d+)\.html$/.exec(address.pathname);
   if (address.origin !== 'https://articles.onemoreplace.tw' || !route) return null;
@@ -49,6 +67,7 @@ siteAdapters.push(function detect8comic(root, address) {
     workId, workTitle, chapterId: workId + ':' + chapterToken, chapterTitle, chapterUrl: chapterUrl.href,
     total, entries: [...pages.values()].sort((a, b) => a.index - b.index),
     revealPage: root === document ? revealPage : undefined,
+    nextChapterNavigation: nextComic8Chapter(root, address, chapterToken),
     nextPage: null, nextChapter: null,
   };
 });

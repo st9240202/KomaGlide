@@ -128,10 +128,25 @@ async function testMobile(page, bundle, pngs) {
   assert(privileged.every(req => req.anonymous && req.headers.Referer === mobileOrigin + "/"));
 
   await page.goto(mobileChapter + "?cached=1#p=3");
+  await page.evaluate(() => {
+    const words = Array(37).fill("");
+    Object.assign(words, {1:"SMH", 2:"reader", 3:"bookId", 4:"23394", 5:"chapterId", 6:"762877",
+      7:"nextId", 8:"762594", 36:"preInit"});
+    window.LZString = {decompressFromBase64: () => words.join("|")};
+    const packet = document.createElement("script");
+    packet.type = "text/plain";
+    packet.textContent = "function(p,a,c,k,e,d){return p;}('1.2({\"3\":4,\"5\":6,\"7\":8}).A();',37,37," +
+      "'fixture-dictionary'['split']('|'),0,{})";
+    document.head.append(packet);
+  });
   await installReader(page, bundle);
   const reader = await openReader(page);
   await expectPage(reader, 3, pngs[2]);
   await expectPage(reader, 4, pngs[3]);
+  const navigation = reader.getByRole("button", { name: "頁面導覽" });
+  await navigation.click();
+  await reader.getByRole("button", { name: "接上下一話" }).waitFor({ timeout: 4000 });
+  await navigation.click();
   await page.keyboard.press("PageUp");
   await expectPage(reader, 1, pngs[0]);
   await expectPage(reader, 2, pngs[1]);

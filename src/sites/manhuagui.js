@@ -2,6 +2,59 @@
 const manhuaguiImages = new WeakMap();
 const manhuaguiOrigins = new Set(['https://tw.manhuagui.com', 'https://m.manhuagui.com']);
 const manhuaguiRoute = /^\/comic\/(\d+)\/(\d+)\.html$/;
+const mobileManhuaguiConfig = new WeakMap();
+
+function readMobileManhuaguiConfig(root, site) {
+  if (mobileManhuaguiConfig.has(root)) return mobileManhuaguiConfig.get(root);
+  // The mobile reader keeps its settings inside SMH.reader. Read the inline
+  // argument as data. The site's dictionary decoder does not execute the packer.
+  const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (const script of root.querySelectorAll('script:not([src])')) {
+    const source = script.textContent;
+    if (source.length > 128_000 || !source.includes('function(p,a,c,k,e,d)')) continue;
+    const packet = /\}\('([^']*)',(\d{1,2}),(\d{1,4}),'([^']*)'\[/.exec(source);
+    if (!packet) continue;
+    const [, packed, base, count, dictionary] = packet;
+    const radix = Number(base);
+    if (radix < 2 || radix > alphabet.length) continue;
+    try {
+      const unpacked = dictionary.includes('|') ? dictionary : site.LZString?.decompressFromBase64(dictionary);
+      const words = unpacked?.split('|');
+      if (words?.length !== Number(count)) continue;
+      const data = packed.replace(/\b[0-9a-zA-Z]+\b/g, token => {
+        let index = 0;
+        for (const char of token) {
+          const digit = alphabet.indexOf(char);
+          if (digit >= radix) return token;
+          index = index * radix + digit;
+          if (index >= words.length) return token;
+        }
+        return words[index] || token;
+      });
+      const json = /^SMH\.reader\((\{[\s\S]*\})\)\.preInit\(\);?$/.exec(data)?.[1];
+      if (!json) continue;
+      const {bookId, chapterId, nextId} = JSON.parse(json);
+      const config = {bookId, chapterId, nextId};
+      mobileManhuaguiConfig.set(root, config);
+      return config;
+    } catch {
+      // An unrecognized packet should not affect normal reading.
+    }
+  }
+  return null;
+}
+
+function nextManhuaguiChapter(root, address, workId, chapterId, mobile) {
+  const site = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
+  const config = mobile ? readMobileManhuaguiConfig(root, site) : site.cInfo;
+  const book = mobile ? config?.bookId : config?.bid;
+  const chapter = mobile ? config?.chapterId : config?.cid;
+  const next = Number(config?.nextId);
+  if (String(book) !== workId || String(chapter) !== chapterId ||
+      !Number.isSafeInteger(next) || next <= 0 || String(next) === chapterId) return null;
+  const chapterUrl = new URL('/comic/' + workId + '/' + next + '.html', address).href;
+  return {url:chapterUrl, chapterUrl};
+}
 
 function manhuaguiImageUrl(value, base) {
   const url = webUrl(value, base);
@@ -89,7 +142,8 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
   const start = hashPage();
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl:address.origin + address.pathname,
     total, entries:entry ? [entry] : [], startIndex:Number.isSafeInteger(start) && start >= 1 && start <= total ? start : 1,
-    pageLabelSelector:'#pageNo', resolvePage, nextPage:null, nextChapter:null};
+    pageLabelSelector:'#pageNo', resolvePage, nextPage:null, nextChapter:null,
+    nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, true)};
 }
 
 siteAdapters.push(function detectManhuagui(root, address) {
@@ -140,5 +194,6 @@ siteAdapters.push(function detectManhuagui(root, address) {
     if (entry) entries.set(index, entry);
   }
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl: address.origin + address.pathname,
-    total, entries: [...entries.values()], pageLabelSelector, resolvePage, nextPage: null, nextChapter: null};
+    total, entries: [...entries.values()], pageLabelSelector, resolvePage, nextPage: null, nextChapter: null,
+    nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, false)};
 });
