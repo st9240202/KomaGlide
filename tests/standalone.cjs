@@ -186,7 +186,7 @@ async function expectComicExport(context, shelf, emptyShelf, pngs, engine) {
   }
 }
 
-async function expectCenterToggle(page, reader, suppressClick = false) {
+async function expectCenterToggle(page, reader, { suppressClick = false, progress } = {}) {
   const settings = reader.getByRole("button", { name: "閱讀設定", exact: true });
   const navigation = reader.getByRole("button", { name: "頁面導覽", exact: true });
   const artwork = reader.locator('img[data-index="1"]');
@@ -195,6 +195,7 @@ async function expectCenterToggle(page, reader, suppressClick = false) {
   const x = bounds.x + bounds.width / 2;
   const y = bounds.y + bounds.height / 2;
   await settings.waitFor();
+  await progress?.waitFor();
   if (suppressClick) {
     await reader.evaluate(el => {
       // A page or browser can suppress the click normally generated after touch.
@@ -205,10 +206,12 @@ async function expectCenterToggle(page, reader, suppressClick = false) {
   await page.touchscreen.tap(x, y);
   assert.equal(await settings.isVisible(), false);
   assert.equal(await navigation.isVisible(), false);
+  if (progress) assert.equal(await progress.isVisible(), false, "the center tap also hides download progress");
   assert.deepEqual(await artwork.boundingBox(), bounds);
   await page.touchscreen.tap(x, y);
   assert.equal(await settings.isVisible(), true);
   assert.equal(await navigation.isVisible(), true);
+  if (progress) assert.equal(await progress.isVisible(), true, "the next center tap restores download progress");
 }
 
 async function expectSwipeTurns(page, reader, direction) {
@@ -261,13 +264,13 @@ async function expectSwipeTurns(page, reader, direction) {
   await settings.tap();
 }
 
-async function expectDockInsideVisualViewport(page) {
+async function expectInsideVisualViewport(page, selector) {
   const originalSize = page.viewportSize();
   try {
-    for (const size of [{ width: 820, height: 1180 }, { width: 1180, height: 820 }]) {
+    for (const size of [originalSize, { width: 820, height: 1180 }, { width: 1180, height: 820 }]) {
       await page.setViewportSize(size);
-      const positions = await page.evaluate(async () => {
-        const dock = document.querySelector('.kg-source-tools').shadowRoot.querySelector('.dock');
+      const positions = await page.evaluate(async selector => {
+        const indicator = document.querySelector('.kg-source-tools').shadowRoot.querySelector(selector);
         const viewport = window.visualViewport;
         const filler = document.createElement('div');
         filler.style.height = '300vh';
@@ -290,7 +293,7 @@ async function expectDockInsideVisualViewport(page) {
             });
             viewport.dispatchEvent(new Event(event));
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-            const rect = dock.getBoundingClientRect();
+            const rect = indicator.getBoundingClientRect();
             samples.push({ top: rect.top, bottomGap: height + offsetTop - rect.bottom, offsetTop, scrollTop });
           }
           return samples;
@@ -301,10 +304,10 @@ async function expectDockInsideVisualViewport(page) {
           filler.remove();
           window.scrollTo(0, 0);
         }
-      });
+      }, selector);
       for (const position of positions) {
         assert(position.top >= position.offsetTop && position.bottomGap >= 7 && position.bottomGap <= 64,
-          `dock must stay above the visible viewport edge: ${JSON.stringify(position)}`);
+          `${selector} must stay above the visible viewport edge: ${JSON.stringify(position)}`);
       }
     }
   } finally {
@@ -372,10 +375,13 @@ async function run() {
     await shelfShortcut.waitFor();
     await expectTouchTarget(shelfShortcut);
     await expectTouchTarget(page.getByRole("button", { name: "直向閱讀器", exact: true }));
-    await expectDockInsideVisualViewport(page);
+    await expectInsideVisualViewport(page, '.dock');
     await openReader(page, pngs);
     const reader = page.getByRole("dialog", { name: "直向閱讀器", exact: true });
-    await expectCenterToggle(page, reader, true);
+    const progress = reader.locator('.buffer-progress');
+    await progress.waitFor();
+    await expectInsideVisualViewport(page, '.buffer-progress');
+    await expectCenterToggle(page, reader, { suppressClick: true, progress });
     if (engine === "chromium") {
       await expectSwipeTurns(page, reader, "rtl");
     }

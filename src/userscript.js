@@ -269,23 +269,25 @@
     .dock {
       all:initial;direction:ltr;box-sizing:border-box;font:14px/1.25 "DM Sans","PingFang TC","Microsoft JhengHei",sans-serif;
       --paper:#f7f6f2;--ink:#222520;--muted:#586158;--line:#9ca79b;--surface:#e9ede2;--hover:#dbe3d6;--accent:#39654c;--alert:#733b2e;
-      --dock-bottom-gap:max(8px, var(--dock-toolbar-clearance, 0px), calc(env(safe-area-inset-bottom,0px) + 8px));
-      color-scheme:light;position:fixed;z-index:2147483646;right:calc(env(safe-area-inset-right,0px) + 8px);
-      bottom:var(--dock-bottom-gap);
+      color-scheme:light;z-index:2147483646;right:calc(env(safe-area-inset-right,0px) + 8px);
       max-width:calc(100vw - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px) - 16px);
       display:flex;align-items:stretch;background:var(--paper);color:var(--ink);
       border:1px solid var(--line);border-radius:8px;box-shadow:0 2px 7px rgb(0 0 0 / 14%);
     }
+    .dock,.buffer-progress {
+      --floating-bottom-gap:max(8px, var(--floating-toolbar-clearance, 0px), calc(env(safe-area-inset-bottom,0px) + 8px));
+      position:fixed;bottom:var(--floating-bottom-gap);
+    }
     @supports (height:100dvh) {
-      .dock {
-        top:calc(min(100dvh, var(--dock-visible-bottom, 100dvh)) - var(--dock-bottom-gap));
+      .dock,.buffer-progress {
+        top:calc(min(100dvh, var(--floating-visible-bottom, 100dvh)) - var(--floating-bottom-gap));
         bottom:auto;
-        transform:translateY(-100%);
       }
+      .dock {transform:translateY(-100%)}
     }
     @supports (-webkit-touch-callout:none) {
       /* Leave room for iOS/iPadOS browser controls drawn over the page. */
-      .dock {--dock-toolbar-clearance:48px}
+      .dock,.buffer-progress {--floating-toolbar-clearance:48px}
     }
     @media(prefers-color-scheme:dark) {
       .dock {color-scheme:dark;--paper:#171b18;--ink:#e5e9e2;--muted:#b2baaf;--line:#636e63;--surface:#242b24;--hover:#354237;--accent:#a7c8ad;--alert:#eeb9a5}
@@ -311,7 +313,10 @@
     dialog:not(.kg-thumb-picker)::backdrop {background:var(--paper)}
     .source-chapter-title {font-size:15px;font-weight:650;overflow-wrap:anywhere}
     .source-chapter-subtitle {font-size:13px;overflow-wrap:anywhere}
-    .buffer-progress {position:fixed;bottom:max(8px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:2px 9px;border-radius:5px;background:var(--paper);color:var(--ink);border:1px solid var(--line);font-size:12px;white-space:nowrap;pointer-events:none}
+    .buffer-progress {left:50%;transform:translateX(-50%);padding:2px 9px;border-radius:5px;background:var(--paper);color:var(--ink);border:1px solid var(--line);font-size:12px;white-space:nowrap;pointer-events:none}
+    @supports (height:100dvh) {
+      .buffer-progress {transform:translate(-50%,-100%)}
+    }
     .chapter-actions {display:grid;gap:.5rem}
     .chapter-actions [role="status"]:empty {display:none}
     .chapter-boundary {height:1px;pointer-events:none}
@@ -1076,14 +1081,15 @@
         chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal),
         button(t('library'), openShelf), button(t('closeReader'), () => overlay.close())
       ];
-      overlay.append(...settingsExtras, chapterActions, bufferProgress);
+      overlay.append(...settingsExtras, chapterActions);
+      trackFloatingViewport(bufferProgress, controller.signal);
       getShelfEvents().changes.addEventListener('change', ({detail}) => {
         if (detail.kind === 'limit' || (detail.kind === 'saved' && detail.workId === group.chapter.workId &&
             detail.chapterId === group.chapter.chapterId)) scheduleBufferProgress();
       }, {signal:controller.signal});
       controls = mountReaderControls(overlay, {
         mode, theme, direction, tapToTurn, thumbnailSize, keyTarget:overlay, themeTarget:overlay, tapTarget:pane, onMode:changeMode,
-        settingsExtras, navigationExtras:[chapterActions], bufferMode,
+        settingsExtras, navigationExtras:[chapterActions], progressIndicator:bufferProgress, bufferMode,
         parallelPreload: first.parallelPages ? {
           value: savedParallelPreload ?? 'default',
           defaultValue: defaultParallelPreload,
@@ -1193,23 +1199,24 @@
     return {dispose, refreshSource};
   }
 
-  function trackDockViewport(dock) {
+  function trackFloatingViewport(target, signal) {
     const viewport = window.visualViewport;
     if (!viewport) return;
     let frame = 0;
     function update() {
       frame = 0;
       if (viewport.height > 0) {
-        dock.style.setProperty('--dock-visible-bottom', (viewport.offsetTop + viewport.height) + 'px');
+        target.style.setProperty('--floating-visible-bottom', (viewport.offsetTop + viewport.height) + 'px');
       }
     }
     function schedule() {
       if (!frame) frame = requestAnimationFrame(update);
     }
-    viewport.addEventListener('resize', schedule);
-    viewport.addEventListener('scroll', schedule, {passive:true});
-    window.addEventListener('resize', schedule);
-    window.addEventListener('pageshow', schedule);
+    viewport.addEventListener('resize', schedule, {signal});
+    viewport.addEventListener('scroll', schedule, {passive:true, signal});
+    window.addEventListener('resize', schedule, {signal});
+    window.addEventListener('pageshow', schedule, {signal});
+    signal?.addEventListener('abort', () => cancelAnimationFrame(frame), {once:true});
     update();
   }
 
@@ -1278,7 +1285,7 @@
     dock.append(open, preloadButton, status, errorNotice);
     root.append(dock);
     document.body.append(host);
-    trackDockViewport(dock);
+    trackFloatingViewport(dock);
     let chapter, inlineHost, inlineFlow, dialog, overlayFlow;
     let preloadJob, preloadError = '', captureError = '';
 

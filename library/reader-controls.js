@@ -457,6 +457,7 @@ export function mountReaderControls(container, options) {
   pager.append(previous, count, next);
   navigation.panel.append(pager);
   attachExtras(navigation.panel, options.navigationExtras);
+  if (options.progressIndicator) toolbar.append(options.progressIndicator);
   container.append(toolbar);
 
   keyTarget.addEventListener('click', event => {
