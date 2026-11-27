@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>潮汐郵局 · KomaGlide 小說閱讀器</title>
+<style>
+:root {
+  --serif: "Songti TC", "Noto Serif TC", "PMingLiU", serif;
+  --size: 20px; --leading: 1.95;
+  font-family: "DM Sans", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+:root, [data-theme="paper"] {
+  color-scheme: light;
+  --paper: #fbfaf5; --side: #f0f0e7; --ink: #252f2a; --muted: #58665c;
+  --line: #d3d7ca; --accent: #345d49; --wash: #dfe8d9; --stamp: #9a4837;
+}
+[data-theme="sepia"] {
+  color-scheme: light; --paper: #f3e5cb; --side: #eaddc2; --ink: #483522; --muted: #70573e;
+  --line: #cdbca0; --accent: #77512f; --wash: #e8d6b9; --stamp: #86452f;
+}
+[data-theme="sage"] {
+  color-scheme: light; --paper: #e4eddd; --side: #d9e4d2; --ink: #263a2b; --muted: #4e624f;
+  --line: #b6c8b3; --accent: #345c42; --wash: #cfdfc8; --stamp: #725038;
+}
+[data-theme="night"] {
+  color-scheme: dark; --paper: #1c2421; --side: #202b25; --ink: #e6e8dd; --muted: #b0bcaf;
+  --line: #415046; --accent: #b2cdb6; --wash: #324639; --stamp: #ebaa91;
+}
+[data-theme="navy"] {
+  color-scheme: dark; --paper: #172236; --side: #1c293e; --ink: #dce3f1; --muted: #adbbcf;
+  --line: #3b4e6a; --accent: #acc8ec; --wash: #2d4059; --stamp: #e9b599;
+}
+[data-theme="black"] {
+  color-scheme: dark; --paper: #000000; --side: #101010; --ink: #dbdbdb; --muted: #a8a8a8;
+  --line: #424242; --accent: #d3d3d3; --wash: #292929; --stamp: #c9b7a3;
+}
+* { box-sizing: border-box; }
+body { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--paper); color: var(--ink); }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: transparent; }
+button:disabled { opacity: .35; cursor: default; }
+button:hover:enabled { background: var(--wash); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+header, footer { padding-inline: clamp(12px, 2.5vw, 40px); }
+header { display: flex; align-items: center; gap: 14px; min-height: 56px; border-bottom: 1px solid var(--line); }
+.header-work { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 600 15px var(--serif); }
+header .brand { padding-right: 14px; border-right: 1px solid var(--line); }
+#reader-close { color: var(--muted); white-space: nowrap; }
+#sidebar-toggle { color: var(--accent); background: var(--wash); }
+.brand { font: 750 21px/1 "DM Sans", system-ui, sans-serif; letter-spacing: -1px; }
+.brandmark { display: inline-grid; grid-template-columns: repeat(2, 7px); gap: 3px; transform: skewY(-12deg); margin-right: 9px; vertical-align: -1px; }
+.brandmark::before,.brandmark::after { content: ""; height: 16px; border-radius: 1px; background: var(--accent); }
+.brandmark::after { height: 13px; }
+.tool { min-height: 44px; padding: 6px 12px; border-radius: 6px; font-size: 14px; }
+.tool b { font: 600 18px Georgia, serif; margin-right: 6px; }
+#contents-open { display: none; }
+.layout { min-height: 0; display: grid; grid-template-columns: clamp(232px, 24vw, 316px) minmax(0, 1fr); }
+.layout[data-sidebar-collapsed] { grid-template-columns: minmax(0, 1fr); }
+aside { padding: clamp(22px, 3vw, 42px); overflow: auto; background: var(--side); border-right: 1px solid var(--line); }
+.cover { position: relative; isolation: isolate; overflow: hidden; background: #365847; color: #faf4db; padding: 19px 21px; width: 100%; max-width: 242px; min-height: 144px; border-left: 6px double #a9b09a; }
+.cover::after { content: ""; position: absolute; z-index: -1; width: 230%; height: 235%; left: -23%; top: 40%; background: repeating-radial-gradient(ellipse, transparent 0 6px, #b4c4a261 7px 8px, transparent 9px 14px); transform: rotate(-16deg); }
+.cover small { font: 10px ui-monospace, monospace; letter-spacing: 2px; }
+.cover strong { display: block; font: 600 29px/1.6 var(--serif); letter-spacing: .12em; }
+.contents-title { display: flex; align-items: baseline; justify-content: space-between; margin: 34px 0 12px; }
+.contents-title h2 { margin: 0; font-size: 15px; }
+.contents-title small,.chapter-num { color: var(--muted); font: 12px ui-monospace, monospace; }
+.chapter-link { display: flex; align-items: baseline; width: 100%; text-align: left; gap: 14px; padding: 14px 10px; border-radius: 4px; font-size: 15px; }
+.chapter-link[hidden] { display: none; }
+.chapter-num { flex: none; font-variant-numeric: tabular-nums; }
+.chapter-name { min-width: 0; overflow-wrap: anywhere; }
+.chapter-link[aria-current] { color: var(--accent); background: var(--wash); font-weight: 700; box-shadow: inset 2px 0 var(--accent); }
+main { overflow: auto; scrollbar-gutter: stable; }
+article { margin: auto; max-width: 43rem; padding: clamp(34px, 5.5vw, 80px) clamp(22px, 3.5vw, 50px) 64px; box-sizing: content-box; }
+.chapter-label { display: flex; align-items: center; gap: 11px; color: var(--stamp); font-size: 13px; letter-spacing: .12em; }
+.chapter-label::before { content: ""; width: 29px; border-top: 1px solid; }
+h1 { font: 700 clamp(32px, 4vw, 54px)/1.35 var(--serif); letter-spacing: .045em; margin: 14px 0 8px; }
+.meta { font-size: 13px; color: var(--muted); margin: 0 0 29px; }
+.prose { border-top: 1px solid var(--line); padding-top: 12px; font: var(--size)/var(--leading) var(--serif); letter-spacing: .035em; overflow-wrap: anywhere; }
+.prose p { margin: 1em 0 0; }
+#chapter-end { margin: 38px 0 0; border-top: 1px solid var(--line); padding-top: 18px; text-align: right; }
+#chapter-end button,.step { padding: 8px 12px; border-radius: 6px; min-height: 44px; }
+footer {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;
+  padding-block: 4px max(4px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line);
+  background: var(--paper); font-size: 14px;
+}
+#contents-open { grid-column: 1; justify-self: start; }
+#steps { grid-column: 2; display: flex; gap: 10px; align-items: center; }
+#steps.reverse { flex-direction: row-reverse; }
+#settings-open { grid-column: 3; justify-self: end; }
+.step { color: var(--accent); background: var(--wash); white-space: nowrap; font-weight: 600; }
+.step:hover:enabled { box-shadow: inset 0 0 0 1px var(--accent); }
+.progress { min-width: 100px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+#progress-label { margin-right: 5px; font-size: 12px; }
+progress { display: block; width: 100%; height: 3px; margin-top: 3px; accent-color: var(--accent); }
+dialog { background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; width: min(360px, calc(100% - 28px)); padding: 22px; box-shadow: 0 16px 60px #14251b25; }
+dialog::backdrop { background: #18241d45; }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; }
+.dialog-head h2 { margin: 0; font-size: 20px; }
+.dialog-head button { font-size: 22px; width: 44px; height: 44px; }
+#contents[open] {
+  position: fixed; inset: 0; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none;
+  height: 100dvh; border: 0; border-radius: 0; padding: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.contents-controls {
+  flex: none; border-bottom: 1px solid var(--line);
+  padding: max(8px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left));
+}
+.contents-controls .dialog-head { gap: 8px; margin-bottom: 8px; }
+.contents-controls h2 {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere; font-size: 17px; line-height: 1.35;
+}
+.contents-controls .dialog-head button { flex: none; }
+.chapter-search {
+  min-height: 44px; padding: 7px 10px; border: 1px solid var(--muted); border-radius: 5px;
+  background: var(--paper); font-size: 16px;
+}
+.contents-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.contents-actions p { color: var(--muted); font-size: 13px; margin: 0; }
+#locate-chapter { min-height: 44px; padding: 8px; border-radius: 5px; font-size: 14px; }
+#mobile-toc {
+  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  padding: 6px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+#mobile-toc .chapter-link { min-height: 48px; line-height: 1.45; }
+#mobile-toc .chapter-link:focus-visible { outline-offset: -2px; }
+.setting { margin-top: 18px; display: grid; gap: 8px; font-size: 14px; }
+.palettes { margin: 18px 0 0; padding: 0; border: 0; }
+.palettes legend { padding: 0; font-size: 14px; }
+.palette-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.palette-group { margin: 10px 0 5px; color: var(--muted); font-size: 12px; }
+.palette-row label {
+  display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 44px;
+  background: var(--paper); color: var(--ink); border: 1px solid var(--muted); border-radius: 5px;
+  cursor: pointer; font: 600 14px var(--serif);
+}
+.palette-row input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.palette-row label:has(:checked) { box-shadow: inset 0 0 0 1px var(--ink); }
+#settings { max-height: calc(100dvh - 28px); overflow-y: auto; }
+.gesture-hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.setting label { display: flex; justify-content: space-between; }
+select { width: 100%; padding: 8px; background: var(--paper); border: 1px solid var(--line); border-radius: 4px; }
+input { width: 100%; accent-color: var(--accent); }
+@media (max-width: 760px), (max-height: 540px) and (pointer: coarse) {
+  .layout { grid-template-columns: 1fr; }
+  aside,#sidebar-toggle { display: none; }
+  header { min-height: 46px; gap: 8px; padding-inline: 12px; }
+  header .brand { font-size: 16px; padding-right: 9px; }
+  #reader-close { font-size: 13px; padding-inline: 4px; }
+  #contents-open { display: block; }
+  #contents-open,#settings-open { padding-inline: 6px; min-width: 44px; }
+  #settings-open b { display: none; }
+  article { padding: 32px 22px 40px; }
+  main { scrollbar-gutter: auto; }
+  footer { gap: 2px; padding-inline: max(4px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-right)); }
+  #steps { gap: 4px; }
+  .step { padding-inline: 8px; }
+  .progress { min-width: 42px; font-size: 12px; }
+  #progress-label { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+}
+@media(max-width: 350px) {
+  .step { padding-inline: 5px; }
+  #settings-open, #contents-open { font-size: 13px; }
+}
+
+/* In a paged or vertical layout the text area has two definite dimensions. */
+#reader { min-width: 0; min-height: 0; }
+#reader:is([data-mode="paged"], [data-writing="vertical"]) {
+  scrollbar-gutter: auto; overflow: hidden;
+}
+#reader:is([data-mode="paged"], [data-writing="vertical"]) article {
+  box-sizing: border-box; height: 100%; max-width: 53rem;
+  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr);
+  padding: clamp(12px, 3vh, 32px) clamp(18px, 4vw, 52px);
+}
+#reader:is([data-mode="paged"], [data-writing="vertical"]) article:has(#chapter-status:not([hidden])) { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+#chapter-status { margin: 0 0 8px; color: var(--muted); font-size: 14px; }
+#reader:is([data-mode="paged"], [data-writing="vertical"]) h1 {
+  margin: 5px 0; font-size: clamp(23px, 3vw, 36px);
+}
+#reader:is([data-mode="paged"], [data-writing="vertical"]) .meta {
+  margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line);
+}
+#reader:is([data-mode="paged"], [data-writing="vertical"]) .prose {
+  min-width: 0; min-height: 0; overflow: auto; padding: 0; border: 0; overflow-anchor: none;
+}
+#reader:is([data-mode="paged"], [data-writing="vertical"]) #chapter-end { display: none; }
+#reader[data-writing="vertical"] .prose { writing-mode: vertical-rl; text-orientation: mixed; }
+#reader .prose p { margin: 0; }
+#reader .prose p + p { margin-block-start: 1em; }
+#reader[data-mode="scroll"][data-writing="horizontal"] .prose { padding-top: calc(12px + 1em); }
+#reader[data-mode="paged"] .prose { overflow: hidden; touch-action: pan-y pinch-zoom; }
+@media (max-height: 480px) {
+  #reader:is([data-mode="paged"], [data-writing="vertical"]) article {
+    grid-template-rows: auto minmax(0, 1fr); padding-block: 6px;
+  }
+  #reader:is([data-mode="paged"], [data-writing="vertical"]) :is(.meta, .chapter-label) { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <button type="button" id="sidebar-toggle" class="tool" aria-controls="chapter-sidebar" aria-expanded="true">收合章節欄</button>
+  <span class="brand"><i class="brandmark" aria-hidden="true"></i>KomaGlide</span>
+  <span class="header-work" id="header-work"></span>
+  <button id="reader-close" class="tool" hidden>返回原站</button>
+</header>
+<div class="layout" id="reader-layout">
+  <aside id="chapter-sidebar" aria-label="作品與目錄">
+    <div class="cover"><small id="work-source"></small><strong id="work-title">潮汐郵局</strong></div>
+    <div class="contents-title"><h2>章節目錄</h2><small id="chapter-count"></small></div>
+    <nav id="toc" aria-label="章節目錄"></nav>
+  </aside>
+  <main id="reader" tabindex="0" aria-labelledby="chapter-title">
+    <article>
+      <div class="chapter-label" id="number"></div><h1 id="chapter-title" tabindex="-1"></h1>
+      <p class="meta" id="meta"></p><p id="chapter-status" role="status" hidden></p><div class="prose" id="prose"></div>
+      <div id="chapter-end"></div>
+    </article>
+  </main>
+</div>
+<footer>
+  <button id="contents-open" class="tool" aria-haspopup="dialog">目錄</button>
+  <nav id="steps" aria-label="閱讀導覽">
+    <button class="step" id="previous">上一章</button>
+    <div class="progress"><span id="progress-label">本章進度</span><span id="percent">0%</span><progress id="bar" max="100" value="0" aria-label="本章進度"></progress></div>
+    <button class="step" id="next">下一章</button>
+  </nav>
+  <button id="settings-open" class="tool" aria-haspopup="dialog"><b aria-hidden="true">Aa</b>閱讀設定</button>
+</footer>
+<dialog id="contents" aria-labelledby="contents-title">
+  <div class="contents-controls">
+    <div class="dialog-head"><h2 id="contents-title">章節目錄</h2><button id="contents-close" aria-label="關閉目錄" autofocus>×</button></div>
+    <input class="chapter-search" id="chapter-search" type="search" aria-label="搜尋章名或章節序號"
+      placeholder="搜尋章名或章節序號" enterkeyhint="search" autocomplete="off">
+    <div class="contents-actions">
+      <p id="chapter-results" role="status" aria-atomic="true"></p>
+      <button id="locate-chapter">目前章節</button>
+    </div>
+  </div>
+  <nav id="mobile-toc" aria-label="章節清單"></nav>
+</dialog>
+<dialog id="settings" aria-labelledby="settings-title">
+  <div class="dialog-head"><h2 id="settings-title">閱讀設定</h2><button aria-label="關閉設定">×</button></div>
+  <div class="setting"><label for="mode">閱讀模式</label><select id="mode" aria-describedby="gesture-hint"><option value="scroll">連續捲動</option><option value="paged">逐頁翻閱</option></select><p class="gesture-hint" id="gesture-hint" hidden></p></div>
+  <div class="setting"><label for="writing">文字排列</label><select id="writing"><option value="horizontal">橫排（左起）</option><option value="vertical">直排（右起）</option></select></div>
+  <div class="setting"><label for="size">字級<output id="size-output" for="size"></output></label><input type="range" id="size" min="16" max="30" step="1" value="20"></div>
+  <div class="setting"><label for="leading">行距</label><select id="leading"><option value="1.65">緊湊</option><option value="1.95" selected>標準</option><option value="2.25">寬鬆</option></select></div>
+  <fieldset class="palettes"><legend>閱讀配色</legend>
+    <p class="palette-group" id="light-label">淺色</p>
+    <div class="palette-row" role="group" aria-labelledby="light-label">
+      <label data-theme="paper"><input type="radio" name="theme" value="paper" checked>紙白</label>
+      <label data-theme="sepia"><input type="radio" name="theme" value="sepia">暖茶</label>
+      <label data-theme="sage"><input type="radio" name="theme" value="sage">鼠尾草</label>
+    </div>
+    <p class="palette-group" id="dark-label">深色</p>
+    <div class="palette-row" role="group" aria-labelledby="dark-label">
+      <label data-theme="night"><input type="radio" name="theme" value="night">墨綠</label>
+      <label data-theme="navy"><input type="radio" name="theme" value="navy">午夜藍</label>
+      <label data-theme="black"><input type="radio" name="theme" value="black">純黑</label>
+    </div>
+  </fieldset>
+</dialog>
+<script>
+function mountNovelReader(document, window, source) {
+  'use strict';
+  const {chapters, workTitle, loadChapter, initialChapter, close, signal} = source;
+  const storageKey = source.storageKey;
+  const $ = id => document.getElementById(id);
+  const reader = $('reader');
+  const contents = $('contents');
+  const mobileToc = $('mobile-toc');
+  const chapterSearch = $('chapter-search');
+  const locateChapter = $('locate-chapter');
+  const sidebar = $('chapter-sidebar');
+  const sidebarToggle = $('sidebar-toggle');
+  const key = storageKey;
+  $('work-source').textContent = source.siteName;
+  $('work-title').textContent = workTitle;
+  $('header-work').textContent = workTitle;
+  $('chapter-count').textContent = '全 ' + chapters.length + ' 章';
+  $('contents-title').textContent = workTitle + ' · 目錄';
+  if (close) {
+    $('reader-close').hidden = false;
+    $('reader-close').onclick = close;
+  }
+  let saved;
+  try { saved = JSON.parse(window.localStorage.getItem(key)); } catch { /* Private browsing can disable storage. */ }
+  const state = saved && typeof saved === 'object' ? saved : {};
+  const initial = chapters.findIndex(chapter => chapter.id === state.chapter);
+  const entry = chapters.findIndex(chapter => chapter.id === initialChapter);
+  let current = -1;
+  let loading = false;
+  function persist() {
+    try { window.localStorage.setItem(key, JSON.stringify(state)); } catch { /* Keep reading in this session. */ }
+  }
+  const prose = $('prose');
+  const paged = () => reader.dataset.mode === 'paged';
+  const vertical = () => reader.dataset.writing === 'vertical';
+  const scroller = () => vertical() ? prose : reader;
+  let pages = [], pageIndex = 0;
+  // Keep a logical text offset even if changing the layout moves it into the middle of a page.
+  let readingAnchor = {paragraph: 0, offset: 0};
+  function paragraphNode(text) {
+    const p = document.createElement('p');
+    p.textContent = text;
+    return p;
+  }
+  function atStart(paragraph, offset = 0) { return {paragraph, offset}; }
+  function pageStart(index) {
+    const {paragraph, offset} = pages[index][0];
+    return atStart(paragraph, offset);
+  }
+  function pageFor(anchor) {
+    return Math.max(0, pages.findLastIndex(page => {
+      const start = page[0];
+      return start.paragraph < anchor.paragraph ||
+        (start.paragraph === anchor.paragraph && start.offset <= anchor.offset);
+    }));
+  }
+  // Measure in the actual text area so browser font metrics and writing mode determine each break.
+  function paginate() {
+    pages = [];
+    prose.replaceChildren();
+    let page = [];
+    const fits = () => vertical() ? prose.scrollWidth <= prose.clientWidth : prose.scrollHeight <= prose.clientHeight;
+    const finish = () => { pages.push(page); page = []; prose.replaceChildren(); };
+    chapters[current].paragraphs.forEach((text, paragraph) => {
+      const chars = Array.from(text);
+      let index = 0, offset = 0;
+      while (index < chars.length) {
+        const p = paragraphNode(text.slice(offset));
+        prose.append(p);
+        let count = chars.length - index;
+        if (!fits()) {
+          let lo = 0, hi = count;
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            p.textContent = chars.slice(index, index + mid).join('');
+            if (fits()) lo = mid;
+            else hi = mid - 1;
+          }
+          if (lo === 0 && page.length) { finish(); continue; }
+          count = Math.max(1, lo);
+        }
+        const part = chars.slice(index, index + count).join('');
+        p.textContent = part;
+        page.push({paragraph, offset, text: part});
+        offset += part.length;
+        index += count;
+        if (index < chars.length) finish();
+      }
+    });
+    if (page.length) pages.push(page);
+  }
+  function showPage(index) {
+    pageIndex = index;
+    prose.replaceChildren(...pages[index].map(part => paragraphNode(part.text)));
+    prose.scrollTop = prose.scrollLeft = 0;
+    updateProgress();
+  }
+  function blockStart(rect) { return vertical() ? -rect.right : rect.top; }
+  function charRect(p, offset) {
+    const text = p.firstChild;
+    const range = document.createRange();
+    range.setStart(text, offset);
+    range.setEnd(text, Math.min(offset + 1, text.length));
+    return range.getBoundingClientRect();
+  }
+  function position() {
+    if (paged()) return readingAnchor;
+    const edge = blockStart(scroller().getBoundingClientRect());
+    const nodes = [...prose.children];
+    const index = nodes.findIndex(p => {
+      const rect = p.getBoundingClientRect();
+      return (vertical() ? -rect.left : rect.bottom) > edge;
+    });
+    if (index < 0) return atStart(nodes.length - 1, nodes.at(-1).textContent.length - 1);
+    const p = nodes[index];
+    let lo = 0, hi = p.textContent.length - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const rect = charRect(p, mid);
+      if ((vertical() ? -rect.left : rect.bottom) <= edge) lo = mid + 1;
+      else hi = mid;
+    }
+    return atStart(index, lo);
+  }
+  function layout(anchor, lastPage = false) {
+    const paragraphs = chapters[current].paragraphs;
+    const index = Math.min(paragraphs.length - 1, Math.max(0, anchor?.paragraph || 0));
+    // Earlier prototypes saved a fraction through the paragraph.
+    const offset = anchor?.offset ?? Math.round((anchor?.fraction || 0) * paragraphs[index].length);
+    readingAnchor = atStart(index, Math.max(0, Math.min(paragraphs[index].length - 1, offset)));
+    reader.scrollTop = 0;
+    if (paged()) {
+      paginate();
+      const target = lastPage ? pages.length - 1 : pageFor(readingAnchor);
+      if (lastPage) readingAnchor = pageStart(target);
+      showPage(target);
+    } else {
+      prose.replaceChildren(...paragraphs.map(paragraphNode));
+      prose.scrollLeft = prose.scrollTop = 0;
+      if (index || readingAnchor.offset) {
+        const edge = blockStart(scroller().getBoundingClientRect());
+        const distance = blockStart(charRect(prose.children[index], readingAnchor.offset)) - edge;
+        if (vertical()) prose.scrollLeft -= distance;
+        else reader.scrollTop += distance;
+      }
+      updateProgress();
+    }
+  }
+  function updateProgress() {
+    const area = scroller();
+    const distance = vertical() ? area.scrollWidth - area.clientWidth : area.scrollHeight - area.clientHeight;
+    const read = vertical() ? Math.abs(area.scrollLeft) : area.scrollTop;
+    const ratio = paged() ? (pageIndex + 1) / pages.length : distance > 0 ? read / distance : 1;
+    const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+    $('bar').value = percent;
+    $('progress-label').textContent = paged() ? '本章頁碼' : '本章進度';
+    $('percent').textContent = paged() ? (pageIndex + 1) + ' / ' + pages.length : percent + '%';
+    const first = !paged() || pageIndex === 0;
+    const last = !paged() || pageIndex === pages.length - 1;
+    $('previous').textContent = first ? '上一章' : '上一頁';
+    $('next').textContent = last ? '下一章' : '下一頁';
+    $('previous').disabled = first && current === 0;
+    $('next').disabled = last && current === chapters.length - 1;
+    $('steps').classList.toggle('reverse', paged() && vertical());
+  }
+  function remember() {
+    if (current < 0) return;
+    state.chapter = chapters[current].id;
+    const {paragraph, offset} = position();
+    state.anchor = {paragraph, offset};
+    persist();
+  }
+  async function selectChapter(index, lastPage = false, anchor = null) {
+    if (loading || index < 0 || index >= chapters.length) return;
+    if (contents.open) contents.close();
+    if (current !== index || !prose.children.length) {
+      const chapter = chapters[index];
+      const status = $('chapter-status');
+      if (!chapter.paragraphs) {
+        loading = true;
+        $('previous').disabled = $('next').disabled = true;
+        status.textContent = '載入章節中…';
+        status.hidden = false;
+        try {
+          chapter.paragraphs = await loadChapter(chapter, signal);
+        } catch {
+          if (!signal?.aborted) status.textContent = '無法載入章節，請從目錄重試或返回原站。';
+          return;
+        } finally {
+          loading = false;
+          if (!signal?.aborted && current >= 0) updateProgress();
+        }
+        if (signal?.aborted) return;
+      }
+      status.hidden = true;
+      current = index;
+      render(anchor, lastPage);
+      remember();
+    }
+    $('chapter-title').focus({preventScroll:true});
+  }
+  function render(anchor, lastPage = false) {
+    const chapter = chapters[current];
+    $('number').textContent = '第 ' + (current + 1) + ' 章';
+    $('chapter-title').textContent = chapter.title;
+    document.title = chapter.title + ' · ' + workTitle + ' · KomaGlide';
+    const length = chapter.paragraphs.join('').replace(/[\p{P}\s]/gu, '').length;
+    $('meta').textContent = workTitle + '　／　' + length + ' 字';
+    locateChapter.disabled = false;
+    for (const link of document.querySelectorAll('.chapter-link')) {
+      if (Number(link.dataset.index) === current) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
+    const end = $('chapter-end');
+    if (current === chapters.length - 1) end.textContent = '全書完';
+    else {
+      const next = document.createElement('button');
+      next.textContent = '下一章　' + chapters[current + 1].title + '　→';
+      next.onclick = () => selectChapter(current + 1);
+      end.replaceChildren(next);
+    }
+    layout(anchor, lastPage);
+  }
+  for (const nav of [$('toc'), mobileToc]) {
+    chapters.forEach((chapter, index) => {
+      const button = document.createElement('button');
+      button.className = 'chapter-link';
+      button.dataset.index = index;
+      const num = document.createElement('span');
+      num.className = 'chapter-num';
+      num.textContent = String(index + 1).padStart(2, '0');
+      const name = document.createElement('span');
+      name.className = 'chapter-name';
+      name.textContent = chapter.title;
+      button.append(num, name);
+      button.onclick = () => selectChapter(index);
+      nav.append(button);
+    });
+  }
+  const chapterRows = [...mobileToc.children];
+  const chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
+  function filterChapters() {
+    const query = chapterSearch.value.normalize('NFKC').trim().toLowerCase();
+    const ordinal = /^\d+$/.test(query) ? Number(query) : null;
+    let matches = 0;
+    chapterRows.forEach((row, index) => {
+      const match = ordinal === null ? chapterTitles[index].includes(query) : index + 1 === ordinal;
+      row.hidden = !match;
+      if (match) matches++;
+    });
+    $('chapter-results').textContent = matches === 0 ? '找不到符合的章節' :
+      query ? '找到 ' + matches + ' 章' : '全 ' + matches + ' 章';
+    mobileToc.scrollTop = 0;
+  }
+  function showCurrentChapter() {
+    chapterSearch.value = '';
+    filterChapters();
+    const row = chapterRows[current];
+    if (row) mobileToc.scrollTop = row.offsetTop - mobileToc.offsetTop -
+      (mobileToc.clientHeight - row.offsetHeight) / 2;
+  }
+  locateChapter.disabled = true;
+  locateChapter.onclick = showCurrentChapter;
+  chapterSearch.addEventListener('input', filterChapters);
+  chapterSearch.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    const matches = chapterRows.filter(row => !row.hidden);
+    if (matches.length === 1) matches[0].click();
+    else chapterSearch.blur();
+  });
+  $('contents-open').onclick = () => {
+    contents.showModal();
+    showCurrentChapter();
+  };
+  $('contents-close').onclick = () => contents.close();
+  function applySidebar() {
+    const collapsed = state.sidebarCollapsed === true;
+    sidebar.hidden = collapsed;
+    $('reader-layout').toggleAttribute('data-sidebar-collapsed', collapsed);
+    sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+    sidebarToggle.textContent = collapsed ? '展開章節欄' : '收合章節欄';
+  }
+  sidebarToggle.onclick = () => {
+    const anchor = current >= 0 ? position() : null;
+    state.sidebarCollapsed = !sidebar.hidden;
+    applySidebar();
+    if (current >= 0) {
+      layout(anchor);
+      remember();
+    } else {
+      persist();
+    }
+    if (!sidebar.hidden) {
+      sidebar.querySelector('[aria-current="page"]')?.scrollIntoView({block:'nearest'});
+    }
+  };
+  applySidebar();
+  const settings = $('settings');
+  $('settings-open').onclick = () => settings.showModal();
+  settings.querySelector('.dialog-head button').onclick = () => settings.close();
+  function step(direction) {
+    if (loading || current < 0) return;
+    const target = pageIndex + direction;
+    if (paged() && target >= 0 && target < pages.length) {
+      readingAnchor = pageStart(target);
+      showPage(target);
+      remember();
+    } else {
+      selectChapter(current + direction, paged() && direction < 0);
+    }
+  }
+  $('previous').onclick = () => step(-1);
+  $('next').onclick = () => step(1);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && close && !document.querySelector('dialog[open]')) {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (!paged() || document.querySelector('dialog[open]') || event.altKey || event.metaKey || event.ctrlKey) return;
+    const directions = {ArrowLeft: vertical() ? 1 : -1, ArrowRight: vertical() ? -1 : 1, PageDown: 1, PageUp: -1};
+    if (Object.hasOwn(directions, event.key)) { event.preventDefault(); step(directions[event.key]); }
+  });
+  // A conventional mouse wheel can also move along right-to-left columns.
+  prose.addEventListener('wheel', event => {
+    if (paged() || !vertical() || event.ctrlKey || event.shiftKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    const unit = event.deltaMode === 1 ? parseFloat(window.getComputedStyle(prose).lineHeight) :
+      event.deltaMode === 2 ? prose.clientWidth : 1;
+    prose.scrollLeft -= event.deltaY * unit;
+    event.preventDefault();
+  }, {passive:false});
+  // Handle taps and swipes together. A swipe must never also fire a tap.
+  let gesture = null;
+  function clearGesture() { gesture = null; }
+  function readingZoomed() { return (window.visualViewport?.scale ?? 1) > 1.01; }
+  function hasSelection() { return Boolean(window.getSelection()?.toString()); }
+  document.addEventListener('touchstart', event => {
+    if (event.touches.length > 1) clearGesture();
+  }, {capture:true, passive:true});
+  prose.addEventListener('touchstart', event => {
+    clearGesture();
+    if (!paged() || event.touches.length !== 1 || readingZoomed() || hasSelection()) return;
+    const touch = event.touches[0];
+    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false};
+  }, {passive:true});
+  prose.addEventListener('touchmove', event => {
+    if (!gesture) return;
+    const touch = event.touches[0];
+    if (!touch || event.touches.length !== 1 || touch.identifier !== gesture.id) return clearGesture();
+    if (Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > 12) gesture.moved = true;
+  }, {passive:true});
+  prose.addEventListener('contextmenu', clearGesture);
+  prose.addEventListener('touchcancel', clearGesture, {passive:true});
+  prose.addEventListener('touchend', event => {
+    const start = gesture;
+    clearGesture();
+    if (!start || event.touches.length || !paged() || readingZoomed() || hasSelection()) return;
+    const touch = event.changedTouches[0];
+    if (touch.identifier !== start.id) return;
+    const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
+    const forward = vertical() ? -1 : 1;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      step(-Math.sign(dx) * forward);
+      return;
+    }
+    if (start.moved || Math.hypot(dx, dy) > 12 || event.timeStamp - start.time > 350) return;
+    const bounds = prose.getBoundingClientRect();
+    const x = (touch.clientX - bounds.left) / bounds.width;
+    if (x >= 0 && x < 1 / 3) step(-forward);
+    if (x <= 1 && x > 2 / 3) step(forward);
+  }, {passive:true});
+  function applySettings() {
+    const root = document.documentElement;
+    root.style.setProperty('--size', $('size').value + 'px');
+    root.style.setProperty('--leading', $('leading').value);
+    reader.dataset.mode = $('mode').value;
+    reader.dataset.writing = $('writing').value;
+    $('gesture-hint').hidden = !paged();
+    $('gesture-hint').textContent = vertical() ? '點正文左側或向右滑可翻到下一頁；點右側或向左滑可往回翻。' :
+      '點正文右側或向左滑可翻到下一頁；點左側或向右滑可往回翻。';
+    $('size-output').value = $('size').value + ' px';
+  }
+  for (const radio of document.querySelectorAll('input[name="theme"]')) {
+    if (radio.value === state.theme) radio.checked = true;
+    if (radio.checked) document.documentElement.dataset.theme = radio.value;
+    radio.onchange = () => {
+      document.documentElement.dataset.theme = state.theme = radio.value;
+      persist();
+    };
+  }
+  for (const field of ['size', 'leading', 'mode', 'writing']) {
+    const input = $(field);
+    if (field === 'size' && Number.isInteger(state.size) && state.size >= 16 && state.size <= 30) input.value = state.size;
+    if (input.options && [...input.options].some(option => option.value === state[field])) input.value = state[field];
+    input.oninput = () => {
+      const anchor = current < 0 ? null : position();
+      state[field] = field === 'size' ? Number(input.value) : input.value;
+      applySettings();
+      if (current >= 0) { layout(anchor); remember(); }
+    };
+  }
+  applySettings();
+  const startIndex = entry >= 0 ? entry : Math.max(0, initial);
+  void selectChapter(startIndex, false, startIndex === initial ? state.anchor : null);
+  let saveTimer;
+  for (const area of [reader, prose]) {
+    area.addEventListener('scroll', () => {
+      if (current < 0 || paged() || area !== scroller()) return;
+      updateProgress();
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(remember, 150);
+    }, {passive:true});
+  }
+  const resizeObserver = new window.ResizeObserver(() => {
+    if (current < 0) return;
+    if (paged()) layout(readingAnchor);
+    else updateProgress();
+  });
+  resizeObserver.observe(reader);
+  document.fonts.ready.then(() => { if (!signal?.aborted && current >= 0 && paged()) layout(readingAnchor); });
+  window.addEventListener('pagehide', remember);
+  signal?.addEventListener('abort', () => {
+    remember();
+    resizeObserver.disconnect();
+    clearTimeout(saveTimer);
+  }, {once:true});
+}
+</script>
+<script>
+mountNovelReader(document, window, {
+  workTitle: '潮汐郵局',
+  siteName: '海港短篇',
+  storageKey: 'komaglide:prototype:tide-post:v1',
+  chapters: [
+  {id: 'low-tide', title: '退潮時的來信', paragraphs: [
+    '郵差把最後一封信塞進門縫的時候，海水正從石階的第七級退下去。阿澄聽見紙擦過木頭的聲音，擱下筷子。碗裡的麵還冒著煙。',
+    '港口的郵局已經關了十一年。門口那只綠色郵筒倒是一直有人擦，投信口的銅片亮得像一枚剛從口袋掏出來的零錢。她小時候最喜歡把手伸進去，看裡面有沒有海風。',
+    '地上的信封濕了一角。收件欄只有短短一行字：給今天最後一個離開碼頭的人。',
+    '阿澄把信翻過來。封口用米糊黏著，背面沾了一片透明的魚鱗。她拿指腹輕輕一碰，魚鱗便留在手上，信封底下露出一個藍色郵戳。',
+    '「媽，今天幾號？」她隔著紗門問。屋外傳來收衣架碰在一起的聲音。母親說，桌上不是有日曆嗎。',
+    '日曆上的數字是十七。郵戳上也是十七，只差了整整十一年。阿澄看了半晌，伸手去摸那碗麵，碗沿已經不燙了。',
+    '她想起郵局關門那天，外公也是這麼坐在桌前，把袖口捲得很高。那時她才七歲，唯一想問的是郵局那把打孔鉗能不能留給她玩。現在她倒願意拿那把鉗子換他一句話。',
+    '窗外，搬冰的貨車沿著斜坡慢慢滑下去。阿澄把信揣進外套，踩著拖鞋跟在車後頭。她想先去數一數，今天還有幾艘船沒有回來。'
+  ]},
+  {id: 'ice-shop', title: '製冰廠的鑰匙', paragraphs: [
+    '碼頭只剩一輛腳踏車，前輪被繩子拴在欄杆上。菜籃裡擱著一束蔥，蔥白還帶泥。阿澄認得那輛車，因為它的鈴鐺從來不響，騎車的人只好一路用嘴巴喊。',
+    '「找人喔？」製冰廠的蘭姨蹲在路邊補雨鞋。她沒抬頭，伸出沾著膠水的手，準確地指了指海面。「今天最後一個是我。船都回來了，我還要等膠乾。」',
+    '阿澄把信遞過去。蘭姨捏著乾燥的那一角，湊到眼前細看。她看得很慢，連信封上的魚鱗印子都迎著光轉了兩回。',
+    '「字是我的。」蘭姨說。阿澄以為自己聽錯了。蘭姨笑了笑，把左手給她看。「妳外公教我用左手寫的。右手那時候被冰磚砸到，拿不得筆。」',
+    '她們挨著坐在路邊，讓出中間乾淨的一小塊石板來拆信。裡面沒有信紙，只有一枚扁扁的鑰匙，在信封的內側壓出一個淡黃色的輪廓。',
+    '蘭姨光著一隻腳站起來，雨鞋留在原地。「這東西我找了十一年。走，趁我還記得要開哪一扇門。」'
+  ]},
+  {id: 'last-boat', title: '末班船靠岸以前', paragraphs: [
+    '鑰匙打開的是製冰廠後面一只日曬褪色的木櫃。阿澄原以為裡面會有一大疊信，或者一本登記得整整齊齊的帳簿。實際上只有一只搪瓷杯，杯把用紅線纏了好幾圈。',
+    '蘭姨把杯子翻過來，從杯底撕下一張折成四折的小紙片。那是一班渡船的票根。背面用鉛筆寫著兩個名字，一個是蘭，一個是澄。',
+    '「妳七歲那年，說想看港口從船上望回來是什麼樣子。妳外公買了三張票，我們兩個臨時加班，結果妳自己在岸上等到天黑。」',
+    '阿澄想了一下。她記得那天下午買的酸梅冰，記得竹籤在舌尖留下的澀味。至於等了多久，倒已經沒什麼印象。',
+    '她把票根收進搪瓷杯，讓蘭姨去穿雨鞋。末班船還有十二分鐘才開，兩個人慢慢走去都來得及。',
+    '那天她們坐在船尾。港口縮得很小以後，製冰廠和郵局的屋頂終於連成一片。阿澄這才發現，從海上望回去，整條街最亮的東西，原來是郵筒上那枚擦得發光的銅片。'
+  ]}
+]
+});
+</script>
+</body>
+</html>

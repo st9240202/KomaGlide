@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.27
+// @version      0.7.33
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
-// @description  在漫畫分頁閱讀、保存圖片，並從腳本選單開啟本站書庫。
+// @description  閱讀漫畫與小說、保存漫畫圖片，並從腳本選單開啟本站書庫。
 // @description:en Read and save comic pages, and open your site library from the script menu.
 // @description:ja 漫画ページを読みながら画像を保存し、スクリプトメニューからサイトの本棚を開けます。
 // @description:zh-CN 在漫画页面阅读、保存图片，并从脚本菜单打开本站书库。
@@ -2138,6 +2138,560 @@ siteAdapters.push(function detectGeneric(root, address) {
   return {chapterId: url.pathname + url.search, chapterUrl: url.href, chapterTitle: title,
     workId: workTitle, workTitle, total: images.length, entries: images.map((img, i) => ({img, index: i + 1}))};
 });
+
+  function mountNovelReader(document, window, source) {
+  'use strict';
+  const {chapters, workTitle, loadChapter, initialChapter, close, signal} = source;
+  const storageKey = source.storageKey;
+  const $ = id => document.getElementById(id);
+  const reader = $('reader');
+  const contents = $('contents');
+  const mobileToc = $('mobile-toc');
+  const chapterSearch = $('chapter-search');
+  const locateChapter = $('locate-chapter');
+  const sidebar = $('chapter-sidebar');
+  const sidebarToggle = $('sidebar-toggle');
+  const key = storageKey;
+  $('work-source').textContent = source.siteName;
+  $('work-title').textContent = workTitle;
+  $('header-work').textContent = workTitle;
+  $('chapter-count').textContent = '全 ' + chapters.length + ' 章';
+  $('contents-title').textContent = workTitle + ' · 目錄';
+  if (close) {
+    $('reader-close').hidden = false;
+    $('reader-close').onclick = close;
+  }
+  let saved;
+  try { saved = JSON.parse(window.localStorage.getItem(key)); } catch { /* Private browsing can disable storage. */ }
+  const state = saved && typeof saved === 'object' ? saved : {};
+  const initial = chapters.findIndex(chapter => chapter.id === state.chapter);
+  const entry = chapters.findIndex(chapter => chapter.id === initialChapter);
+  let current = -1;
+  let loading = false;
+  function persist() {
+    try { window.localStorage.setItem(key, JSON.stringify(state)); } catch { /* Keep reading in this session. */ }
+  }
+  const prose = $('prose');
+  const paged = () => reader.dataset.mode === 'paged';
+  const vertical = () => reader.dataset.writing === 'vertical';
+  const scroller = () => vertical() ? prose : reader;
+  let pages = [], pageIndex = 0;
+  // Keep a logical text offset even if changing the layout moves it into the middle of a page.
+  let readingAnchor = {paragraph: 0, offset: 0};
+  function paragraphNode(text) {
+    const p = document.createElement('p');
+    p.textContent = text;
+    return p;
+  }
+  function atStart(paragraph, offset = 0) { return {paragraph, offset}; }
+  function pageStart(index) {
+    const {paragraph, offset} = pages[index][0];
+    return atStart(paragraph, offset);
+  }
+  function pageFor(anchor) {
+    return Math.max(0, pages.findLastIndex(page => {
+      const start = page[0];
+      return start.paragraph < anchor.paragraph ||
+        (start.paragraph === anchor.paragraph && start.offset <= anchor.offset);
+    }));
+  }
+  // Measure in the actual text area so browser font metrics and writing mode determine each break.
+  function paginate() {
+    pages = [];
+    prose.replaceChildren();
+    let page = [];
+    const fits = () => vertical() ? prose.scrollWidth <= prose.clientWidth : prose.scrollHeight <= prose.clientHeight;
+    const finish = () => { pages.push(page); page = []; prose.replaceChildren(); };
+    chapters[current].paragraphs.forEach((text, paragraph) => {
+      const chars = Array.from(text);
+      let index = 0, offset = 0;
+      while (index < chars.length) {
+        const p = paragraphNode(text.slice(offset));
+        prose.append(p);
+        let count = chars.length - index;
+        if (!fits()) {
+          let lo = 0, hi = count;
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            p.textContent = chars.slice(index, index + mid).join('');
+            if (fits()) lo = mid;
+            else hi = mid - 1;
+          }
+          if (lo === 0 && page.length) { finish(); continue; }
+          count = Math.max(1, lo);
+        }
+        const part = chars.slice(index, index + count).join('');
+        p.textContent = part;
+        page.push({paragraph, offset, text: part});
+        offset += part.length;
+        index += count;
+        if (index < chars.length) finish();
+      }
+    });
+    if (page.length) pages.push(page);
+  }
+  function showPage(index) {
+    pageIndex = index;
+    prose.replaceChildren(...pages[index].map(part => paragraphNode(part.text)));
+    prose.scrollTop = prose.scrollLeft = 0;
+    updateProgress();
+  }
+  function blockStart(rect) { return vertical() ? -rect.right : rect.top; }
+  function charRect(p, offset) {
+    const text = p.firstChild;
+    const range = document.createRange();
+    range.setStart(text, offset);
+    range.setEnd(text, Math.min(offset + 1, text.length));
+    return range.getBoundingClientRect();
+  }
+  function position() {
+    if (paged()) return readingAnchor;
+    const edge = blockStart(scroller().getBoundingClientRect());
+    const nodes = [...prose.children];
+    const index = nodes.findIndex(p => {
+      const rect = p.getBoundingClientRect();
+      return (vertical() ? -rect.left : rect.bottom) > edge;
+    });
+    if (index < 0) return atStart(nodes.length - 1, nodes.at(-1).textContent.length - 1);
+    const p = nodes[index];
+    let lo = 0, hi = p.textContent.length - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const rect = charRect(p, mid);
+      if ((vertical() ? -rect.left : rect.bottom) <= edge) lo = mid + 1;
+      else hi = mid;
+    }
+    return atStart(index, lo);
+  }
+  function layout(anchor, lastPage = false) {
+    const paragraphs = chapters[current].paragraphs;
+    const index = Math.min(paragraphs.length - 1, Math.max(0, anchor?.paragraph || 0));
+    // Earlier prototypes saved a fraction through the paragraph.
+    const offset = anchor?.offset ?? Math.round((anchor?.fraction || 0) * paragraphs[index].length);
+    readingAnchor = atStart(index, Math.max(0, Math.min(paragraphs[index].length - 1, offset)));
+    reader.scrollTop = 0;
+    if (paged()) {
+      paginate();
+      const target = lastPage ? pages.length - 1 : pageFor(readingAnchor);
+      if (lastPage) readingAnchor = pageStart(target);
+      showPage(target);
+    } else {
+      prose.replaceChildren(...paragraphs.map(paragraphNode));
+      prose.scrollLeft = prose.scrollTop = 0;
+      if (index || readingAnchor.offset) {
+        const edge = blockStart(scroller().getBoundingClientRect());
+        const distance = blockStart(charRect(prose.children[index], readingAnchor.offset)) - edge;
+        if (vertical()) prose.scrollLeft -= distance;
+        else reader.scrollTop += distance;
+      }
+      updateProgress();
+    }
+  }
+  function updateProgress() {
+    const area = scroller();
+    const distance = vertical() ? area.scrollWidth - area.clientWidth : area.scrollHeight - area.clientHeight;
+    const read = vertical() ? Math.abs(area.scrollLeft) : area.scrollTop;
+    const ratio = paged() ? (pageIndex + 1) / pages.length : distance > 0 ? read / distance : 1;
+    const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+    $('bar').value = percent;
+    $('progress-label').textContent = paged() ? '本章頁碼' : '本章進度';
+    $('percent').textContent = paged() ? (pageIndex + 1) + ' / ' + pages.length : percent + '%';
+    const first = !paged() || pageIndex === 0;
+    const last = !paged() || pageIndex === pages.length - 1;
+    $('previous').textContent = first ? '上一章' : '上一頁';
+    $('next').textContent = last ? '下一章' : '下一頁';
+    $('previous').disabled = first && current === 0;
+    $('next').disabled = last && current === chapters.length - 1;
+    $('steps').classList.toggle('reverse', paged() && vertical());
+  }
+  function remember() {
+    if (current < 0) return;
+    state.chapter = chapters[current].id;
+    const {paragraph, offset} = position();
+    state.anchor = {paragraph, offset};
+    persist();
+  }
+  async function selectChapter(index, lastPage = false, anchor = null) {
+    if (loading || index < 0 || index >= chapters.length) return;
+    if (contents.open) contents.close();
+    if (current !== index || !prose.children.length) {
+      const chapter = chapters[index];
+      const status = $('chapter-status');
+      if (!chapter.paragraphs) {
+        loading = true;
+        $('previous').disabled = $('next').disabled = true;
+        status.textContent = '載入章節中…';
+        status.hidden = false;
+        try {
+          chapter.paragraphs = await loadChapter(chapter, signal);
+        } catch {
+          if (!signal?.aborted) status.textContent = '無法載入章節，請從目錄重試或返回原站。';
+          return;
+        } finally {
+          loading = false;
+          if (!signal?.aborted && current >= 0) updateProgress();
+        }
+        if (signal?.aborted) return;
+      }
+      status.hidden = true;
+      current = index;
+      render(anchor, lastPage);
+      remember();
+    }
+    $('chapter-title').focus({preventScroll:true});
+  }
+  function render(anchor, lastPage = false) {
+    const chapter = chapters[current];
+    $('number').textContent = '第 ' + (current + 1) + ' 章';
+    $('chapter-title').textContent = chapter.title;
+    document.title = chapter.title + ' · ' + workTitle + ' · KomaGlide';
+    const length = chapter.paragraphs.join('').replace(/[\p{P}\s]/gu, '').length;
+    $('meta').textContent = workTitle + '　／　' + length + ' 字';
+    locateChapter.disabled = false;
+    for (const link of document.querySelectorAll('.chapter-link')) {
+      if (Number(link.dataset.index) === current) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
+    const end = $('chapter-end');
+    if (current === chapters.length - 1) end.textContent = '全書完';
+    else {
+      const next = document.createElement('button');
+      next.textContent = '下一章　' + chapters[current + 1].title + '　→';
+      next.onclick = () => selectChapter(current + 1);
+      end.replaceChildren(next);
+    }
+    layout(anchor, lastPage);
+  }
+  for (const nav of [$('toc'), mobileToc]) {
+    chapters.forEach((chapter, index) => {
+      const button = document.createElement('button');
+      button.className = 'chapter-link';
+      button.dataset.index = index;
+      const num = document.createElement('span');
+      num.className = 'chapter-num';
+      num.textContent = String(index + 1).padStart(2, '0');
+      const name = document.createElement('span');
+      name.className = 'chapter-name';
+      name.textContent = chapter.title;
+      button.append(num, name);
+      button.onclick = () => selectChapter(index);
+      nav.append(button);
+    });
+  }
+  const chapterRows = [...mobileToc.children];
+  const chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
+  function filterChapters() {
+    const query = chapterSearch.value.normalize('NFKC').trim().toLowerCase();
+    const ordinal = /^\d+$/.test(query) ? Number(query) : null;
+    let matches = 0;
+    chapterRows.forEach((row, index) => {
+      const match = ordinal === null ? chapterTitles[index].includes(query) : index + 1 === ordinal;
+      row.hidden = !match;
+      if (match) matches++;
+    });
+    $('chapter-results').textContent = matches === 0 ? '找不到符合的章節' :
+      query ? '找到 ' + matches + ' 章' : '全 ' + matches + ' 章';
+    mobileToc.scrollTop = 0;
+  }
+  function showCurrentChapter() {
+    chapterSearch.value = '';
+    filterChapters();
+    const row = chapterRows[current];
+    if (row) mobileToc.scrollTop = row.offsetTop - mobileToc.offsetTop -
+      (mobileToc.clientHeight - row.offsetHeight) / 2;
+  }
+  locateChapter.disabled = true;
+  locateChapter.onclick = showCurrentChapter;
+  chapterSearch.addEventListener('input', filterChapters);
+  chapterSearch.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    const matches = chapterRows.filter(row => !row.hidden);
+    if (matches.length === 1) matches[0].click();
+    else chapterSearch.blur();
+  });
+  $('contents-open').onclick = () => {
+    contents.showModal();
+    showCurrentChapter();
+  };
+  $('contents-close').onclick = () => contents.close();
+  function applySidebar() {
+    const collapsed = state.sidebarCollapsed === true;
+    sidebar.hidden = collapsed;
+    $('reader-layout').toggleAttribute('data-sidebar-collapsed', collapsed);
+    sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+    sidebarToggle.textContent = collapsed ? '展開章節欄' : '收合章節欄';
+  }
+  sidebarToggle.onclick = () => {
+    const anchor = current >= 0 ? position() : null;
+    state.sidebarCollapsed = !sidebar.hidden;
+    applySidebar();
+    if (current >= 0) {
+      layout(anchor);
+      remember();
+    } else {
+      persist();
+    }
+    if (!sidebar.hidden) {
+      sidebar.querySelector('[aria-current="page"]')?.scrollIntoView({block:'nearest'});
+    }
+  };
+  applySidebar();
+  const settings = $('settings');
+  $('settings-open').onclick = () => settings.showModal();
+  settings.querySelector('.dialog-head button').onclick = () => settings.close();
+  function step(direction) {
+    if (loading || current < 0) return;
+    const target = pageIndex + direction;
+    if (paged() && target >= 0 && target < pages.length) {
+      readingAnchor = pageStart(target);
+      showPage(target);
+      remember();
+    } else {
+      selectChapter(current + direction, paged() && direction < 0);
+    }
+  }
+  $('previous').onclick = () => step(-1);
+  $('next').onclick = () => step(1);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && close && !document.querySelector('dialog[open]')) {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (!paged() || document.querySelector('dialog[open]') || event.altKey || event.metaKey || event.ctrlKey) return;
+    const directions = {ArrowLeft: vertical() ? 1 : -1, ArrowRight: vertical() ? -1 : 1, PageDown: 1, PageUp: -1};
+    if (Object.hasOwn(directions, event.key)) { event.preventDefault(); step(directions[event.key]); }
+  });
+  // A conventional mouse wheel can also move along right-to-left columns.
+  prose.addEventListener('wheel', event => {
+    if (paged() || !vertical() || event.ctrlKey || event.shiftKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    const unit = event.deltaMode === 1 ? parseFloat(window.getComputedStyle(prose).lineHeight) :
+      event.deltaMode === 2 ? prose.clientWidth : 1;
+    prose.scrollLeft -= event.deltaY * unit;
+    event.preventDefault();
+  }, {passive:false});
+  // Handle taps and swipes together. A swipe must never also fire a tap.
+  let gesture = null;
+  function clearGesture() { gesture = null; }
+  function readingZoomed() { return (window.visualViewport?.scale ?? 1) > 1.01; }
+  function hasSelection() { return Boolean(window.getSelection()?.toString()); }
+  document.addEventListener('touchstart', event => {
+    if (event.touches.length > 1) clearGesture();
+  }, {capture:true, passive:true});
+  prose.addEventListener('touchstart', event => {
+    clearGesture();
+    if (!paged() || event.touches.length !== 1 || readingZoomed() || hasSelection()) return;
+    const touch = event.touches[0];
+    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false};
+  }, {passive:true});
+  prose.addEventListener('touchmove', event => {
+    if (!gesture) return;
+    const touch = event.touches[0];
+    if (!touch || event.touches.length !== 1 || touch.identifier !== gesture.id) return clearGesture();
+    if (Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > 12) gesture.moved = true;
+  }, {passive:true});
+  prose.addEventListener('contextmenu', clearGesture);
+  prose.addEventListener('touchcancel', clearGesture, {passive:true});
+  prose.addEventListener('touchend', event => {
+    const start = gesture;
+    clearGesture();
+    if (!start || event.touches.length || !paged() || readingZoomed() || hasSelection()) return;
+    const touch = event.changedTouches[0];
+    if (touch.identifier !== start.id) return;
+    const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
+    const forward = vertical() ? -1 : 1;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      step(-Math.sign(dx) * forward);
+      return;
+    }
+    if (start.moved || Math.hypot(dx, dy) > 12 || event.timeStamp - start.time > 350) return;
+    const bounds = prose.getBoundingClientRect();
+    const x = (touch.clientX - bounds.left) / bounds.width;
+    if (x >= 0 && x < 1 / 3) step(-forward);
+    if (x <= 1 && x > 2 / 3) step(forward);
+  }, {passive:true});
+  function applySettings() {
+    const root = document.documentElement;
+    root.style.setProperty('--size', $('size').value + 'px');
+    root.style.setProperty('--leading', $('leading').value);
+    reader.dataset.mode = $('mode').value;
+    reader.dataset.writing = $('writing').value;
+    $('gesture-hint').hidden = !paged();
+    $('gesture-hint').textContent = vertical() ? '點正文左側或向右滑可翻到下一頁；點右側或向左滑可往回翻。' :
+      '點正文右側或向左滑可翻到下一頁；點左側或向右滑可往回翻。';
+    $('size-output').value = $('size').value + ' px';
+  }
+  for (const radio of document.querySelectorAll('input[name="theme"]')) {
+    if (radio.value === state.theme) radio.checked = true;
+    if (radio.checked) document.documentElement.dataset.theme = radio.value;
+    radio.onchange = () => {
+      document.documentElement.dataset.theme = state.theme = radio.value;
+      persist();
+    };
+  }
+  for (const field of ['size', 'leading', 'mode', 'writing']) {
+    const input = $(field);
+    if (field === 'size' && Number.isInteger(state.size) && state.size >= 16 && state.size <= 30) input.value = state.size;
+    if (input.options && [...input.options].some(option => option.value === state[field])) input.value = state[field];
+    input.oninput = () => {
+      const anchor = current < 0 ? null : position();
+      state[field] = field === 'size' ? Number(input.value) : input.value;
+      applySettings();
+      if (current >= 0) { layout(anchor); remember(); }
+    };
+  }
+  applySettings();
+  const startIndex = entry >= 0 ? entry : Math.max(0, initial);
+  void selectChapter(startIndex, false, startIndex === initial ? state.anchor : null);
+  let saveTimer;
+  for (const area of [reader, prose]) {
+    area.addEventListener('scroll', () => {
+      if (current < 0 || paged() || area !== scroller()) return;
+      updateProgress();
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(remember, 150);
+    }, {passive:true});
+  }
+  const resizeObserver = new window.ResizeObserver(() => {
+    if (current < 0) return;
+    if (paged()) layout(readingAnchor);
+    else updateProgress();
+  });
+  resizeObserver.observe(reader);
+  document.fonts.ready.then(() => { if (!signal?.aborted && current >= 0 && paged()) layout(readingAnchor); });
+  window.addEventListener('pagehide', remember);
+  signal?.addEventListener('abort', () => {
+    remember();
+    resizeObserver.disconnect();
+    clearTimeout(saveTimer);
+  }, {once:true});
+}
+
+function detectCzbooks(root, address) {
+  if (address.hostname !== 'czbooks.net') return null;
+  const route = /^\/n\/([a-z0-9]+)(?:\/([a-z0-9]+))?\/?$/i.exec(address.pathname);
+  if (!route) return null;
+  const [, workId, chapterId] = route;
+  const title = root.querySelector(chapterId ? '.chapter-detail h1.name' : '.novel-detail h1.title');
+  if (!title || (chapterId && !root.querySelector('.chapter-detail .content'))) return null;
+
+  const bookUrl = new URL('/n/' + workId, address);
+  const wrappedTitle = /^《([^》]+)》/.exec(title.textContent.trim());
+  const workTitle = wrappedTitle?.[1] || title.textContent.trim().replace(/\s*《目錄》$/, '');
+
+  async function readPage(url, signal) {
+    const response = await fetch(url, {signal, mode: 'same-origin'});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return new DOMParser().parseFromString(await response.text(), 'text/html');
+  }
+
+  function chapterText(doc) {
+    const body = doc.querySelector('.chapter-detail .content');
+    if (!body) throw new Error('找不到小說正文');
+    const clean = body.cloneNode(true);
+    clean.querySelectorAll('script,style,iframe,ins,noscript,[hidden],[aria-hidden="true"]').forEach(node => node.remove());
+    for (const br of clean.querySelectorAll('br')) br.replaceWith('\n');
+    for (const block of clean.querySelectorAll('p,div')) block.after('\n');
+    const paragraphs = clean.textContent.split(/\n+/).map(line => line.trim()).filter(Boolean);
+    const chapterTitle = doc.querySelector('.chapter-detail h1.name')?.textContent.trim()
+      .replace(/^《[^》]+》\s*(?:\d+\.\s*)?/, '');
+    if (chapterTitle && paragraphs[0] === chapterTitle) paragraphs.shift();
+    if (/^[（(]本章完[）)]$/.test(paragraphs.at(-1))) paragraphs.pop();
+    if (!paragraphs.length) throw new Error('小說正文是空的');
+    return paragraphs;
+  }
+
+  return {
+    title,
+    async open(signal) {
+      const catalog = chapterId ? await readPage(bookUrl.href, signal) : root;
+      const chapters = new Map();
+      for (const link of catalog.querySelectorAll('#chapter-list a[href]')) {
+        const url = webUrl(link.getAttribute('href'), bookUrl);
+        if (url?.origin !== bookUrl.origin) continue;
+        const parts = url.pathname.split('/');
+        const id = parts[3];
+        const name = link.textContent.trim().replace(/^\d+\.\s*/, '');
+        if (parts.length !== 4 || parts[1] !== 'n' || parts[2] !== workId ||
+            !/^[a-z0-9]+$/i.test(id) || !name || chapters.has(id)) continue;
+        url.hash = '';
+        chapters.set(id, {id, title: name, url: url.href});
+      }
+      if (!chapters.size || (chapterId && !chapters.has(chapterId))) throw new Error('找不到章節目錄');
+      return {
+        chapters: [...chapters.values()],
+        workTitle,
+        siteName: '小說狂人',
+        initialChapter: chapterId,
+        storageKey: PREFIX + 'novel.czbooks.' + workId,
+        loadChapter: async (chapter, abortSignal) => chapterText(
+          chapter.id === chapterId ? root : await readPage(chapter.url, abortSignal)
+        ),
+      };
+    },
+  };
+}
+
+function runCzbooksNovel() {
+  const book = detectCzbooks(document, new URL(location.href));
+  if (!book) return false;
+  const launch = document.createElement('button');
+  launch.type = 'button';
+  launch.textContent = 'KomaGlide 小說閱讀器';
+  launch.style.cssText = 'margin:8px 0 14px;padding:8px 14px;border:1px solid #305c46;border-radius:5px;color:#fff;background:#305c46;font:600 14px system-ui;cursor:pointer';
+  book.title.after(launch);
+  let active;
+  async function open() {
+    if (active) return;
+    const request = new AbortController();
+    active = request;
+    launch.disabled = true;
+    launch.textContent = '載入章節目錄…';
+    try {
+      const source = await book.open(request.signal);
+      const overlay = document.createElement('dialog');
+      overlay.setAttribute('aria-label', 'KomaGlide 小說閱讀器');
+      overlay.style.cssText = 'position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;border:0;padding:0;background:#fbfaf5;overflow:hidden';
+      const frame = document.createElement('iframe');
+      frame.title = 'KomaGlide 小說閱讀器';
+      frame.style.cssText = 'display:block;width:100%;height:100%;border:0';
+      overlay.append(frame);
+      document.body.append(overlay);
+      const restoreViewport = fitReaderViewport();
+      const close = () => {
+        if (request.signal.aborted) return;
+        request.abort();
+        overlay.remove();
+        void restoreViewport?.();
+        active = null;
+        launch.disabled = false;
+        launch.focus({preventScroll:true});
+      };
+      overlay.addEventListener('close', close, {once:true});
+      try {
+        overlay.showModal();
+        const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>潮汐郵局 · KomaGlide 小說閱讀器</title>\n<style>\n:root {\n  --serif: \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  --size: 20px; --leading: 1.95;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n}\n:root, [data-theme=\"paper\"] {\n  color-scheme: light;\n  --paper: #fbfaf5; --side: #f0f0e7; --ink: #252f2a; --muted: #58665c;\n  --line: #d3d7ca; --accent: #345d49; --wash: #dfe8d9; --stamp: #9a4837;\n}\n[data-theme=\"sepia\"] {\n  color-scheme: light; --paper: #f3e5cb; --side: #eaddc2; --ink: #483522; --muted: #70573e;\n  --line: #cdbca0; --accent: #77512f; --wash: #e8d6b9; --stamp: #86452f;\n}\n[data-theme=\"sage\"] {\n  color-scheme: light; --paper: #e4eddd; --side: #d9e4d2; --ink: #263a2b; --muted: #4e624f;\n  --line: #b6c8b3; --accent: #345c42; --wash: #cfdfc8; --stamp: #725038;\n}\n[data-theme=\"night\"] {\n  color-scheme: dark; --paper: #1c2421; --side: #202b25; --ink: #e6e8dd; --muted: #b0bcaf;\n  --line: #415046; --accent: #b2cdb6; --wash: #324639; --stamp: #ebaa91;\n}\n[data-theme=\"navy\"] {\n  color-scheme: dark; --paper: #172236; --side: #1c293e; --ink: #dce3f1; --muted: #adbbcf;\n  --line: #3b4e6a; --accent: #acc8ec; --wash: #2d4059; --stamp: #e9b599;\n}\n[data-theme=\"black\"] {\n  color-scheme: dark; --paper: #000000; --side: #101010; --ink: #dbdbdb; --muted: #a8a8a8;\n  --line: #424242; --accent: #d3d3d3; --wash: #292929; --stamp: #c9b7a3;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--paper); color: var(--ink); }\nbutton, select, input { font: inherit; color: inherit; }\nbutton { cursor: pointer; border: 0; background: transparent; }\nbutton:disabled { opacity: .35; cursor: default; }\nbutton:hover:enabled { background: var(--wash); }\n:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\nheader, footer { padding-inline: clamp(12px, 2.5vw, 40px); }\nheader { display: flex; align-items: center; gap: 14px; min-height: 56px; border-bottom: 1px solid var(--line); }\n.header-work { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 600 15px var(--serif); }\nheader .brand { padding-right: 14px; border-right: 1px solid var(--line); }\n#reader-close { color: var(--muted); white-space: nowrap; }\n#sidebar-toggle { color: var(--accent); background: var(--wash); }\n.brand { font: 750 21px/1 \"DM Sans\", system-ui, sans-serif; letter-spacing: -1px; }\n.brandmark { display: inline-grid; grid-template-columns: repeat(2, 7px); gap: 3px; transform: skewY(-12deg); margin-right: 9px; vertical-align: -1px; }\n.brandmark::before,.brandmark::after { content: \"\"; height: 16px; border-radius: 1px; background: var(--accent); }\n.brandmark::after { height: 13px; }\n.tool { min-height: 44px; padding: 6px 12px; border-radius: 6px; font-size: 14px; }\n.tool b { font: 600 18px Georgia, serif; margin-right: 6px; }\n#contents-open { display: none; }\n.layout { min-height: 0; display: grid; grid-template-columns: clamp(232px, 24vw, 316px) minmax(0, 1fr); }\n.layout[data-sidebar-collapsed] { grid-template-columns: minmax(0, 1fr); }\naside { padding: clamp(22px, 3vw, 42px); overflow: auto; background: var(--side); border-right: 1px solid var(--line); }\n.cover { position: relative; isolation: isolate; overflow: hidden; background: #365847; color: #faf4db; padding: 19px 21px; width: 100%; max-width: 242px; min-height: 144px; border-left: 6px double #a9b09a; }\n.cover::after { content: \"\"; position: absolute; z-index: -1; width: 230%; height: 235%; left: -23%; top: 40%; background: repeating-radial-gradient(ellipse, transparent 0 6px, #b4c4a261 7px 8px, transparent 9px 14px); transform: rotate(-16deg); }\n.cover small { font: 10px ui-monospace, monospace; letter-spacing: 2px; }\n.cover strong { display: block; font: 600 29px/1.6 var(--serif); letter-spacing: .12em; }\n.contents-title { display: flex; align-items: baseline; justify-content: space-between; margin: 34px 0 12px; }\n.contents-title h2 { margin: 0; font-size: 15px; }\n.contents-title small,.chapter-num { color: var(--muted); font: 12px ui-monospace, monospace; }\n.chapter-link { display: flex; align-items: baseline; width: 100%; text-align: left; gap: 14px; padding: 14px 10px; border-radius: 4px; font-size: 15px; }\n.chapter-link[hidden] { display: none; }\n.chapter-num { flex: none; font-variant-numeric: tabular-nums; }\n.chapter-name { min-width: 0; overflow-wrap: anywhere; }\n.chapter-link[aria-current] { color: var(--accent); background: var(--wash); font-weight: 700; box-shadow: inset 2px 0 var(--accent); }\nmain { overflow: auto; scrollbar-gutter: stable; }\narticle { margin: auto; max-width: 43rem; padding: clamp(34px, 5.5vw, 80px) clamp(22px, 3.5vw, 50px) 64px; box-sizing: content-box; }\n.chapter-label { display: flex; align-items: center; gap: 11px; color: var(--stamp); font-size: 13px; letter-spacing: .12em; }\n.chapter-label::before { content: \"\"; width: 29px; border-top: 1px solid; }\nh1 { font: 700 clamp(32px, 4vw, 54px)/1.35 var(--serif); letter-spacing: .045em; margin: 14px 0 8px; }\n.meta { font-size: 13px; color: var(--muted); margin: 0 0 29px; }\n.prose { border-top: 1px solid var(--line); padding-top: 12px; font: var(--size)/var(--leading) var(--serif); letter-spacing: .035em; overflow-wrap: anywhere; }\n.prose p { margin: 1em 0 0; }\n#chapter-end { margin: 38px 0 0; border-top: 1px solid var(--line); padding-top: 18px; text-align: right; }\n#chapter-end button,.step { padding: 8px 12px; border-radius: 6px; min-height: 44px; }\nfooter {\n  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;\n  padding-block: 4px max(4px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line);\n  background: var(--paper); font-size: 14px;\n}\n#contents-open { grid-column: 1; justify-self: start; }\n#steps { grid-column: 2; display: flex; gap: 10px; align-items: center; }\n#steps.reverse { flex-direction: row-reverse; }\n#settings-open { grid-column: 3; justify-self: end; }\n.step { color: var(--accent); background: var(--wash); white-space: nowrap; font-weight: 600; }\n.step:hover:enabled { box-shadow: inset 0 0 0 1px var(--accent); }\n.progress { min-width: 100px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }\n#progress-label { margin-right: 5px; font-size: 12px; }\nprogress { display: block; width: 100%; height: 3px; margin-top: 3px; accent-color: var(--accent); }\ndialog { background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; width: min(360px, calc(100% - 28px)); padding: 22px; box-shadow: 0 16px 60px #14251b25; }\ndialog::backdrop { background: #18241d45; }\n.dialog-head { display: flex; align-items: center; justify-content: space-between; }\n.dialog-head h2 { margin: 0; font-size: 20px; }\n.dialog-head button { font-size: 22px; width: 44px; height: 44px; }\n#contents[open] {\n  position: fixed; inset: 0; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none;\n  height: 100dvh; border: 0; border-radius: 0; padding: 0;\n  display: flex; flex-direction: column; overflow: hidden;\n}\n.contents-controls {\n  flex: none; border-bottom: 1px solid var(--line);\n  padding: max(8px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left));\n}\n.contents-controls .dialog-head { gap: 8px; margin-bottom: 8px; }\n.contents-controls h2 {\n  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;\n  overflow: hidden; overflow-wrap: anywhere; font-size: 17px; line-height: 1.35;\n}\n.contents-controls .dialog-head button { flex: none; }\n.chapter-search {\n  min-height: 44px; padding: 7px 10px; border: 1px solid var(--muted); border-radius: 5px;\n  background: var(--paper); font-size: 16px;\n}\n.contents-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\n.contents-actions p { color: var(--muted); font-size: 13px; margin: 0; }\n#locate-chapter { min-height: 44px; padding: 8px; border-radius: 5px; font-size: 14px; }\n#mobile-toc {\n  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;\n  padding: 6px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));\n}\n#mobile-toc .chapter-link { min-height: 48px; line-height: 1.45; }\n#mobile-toc .chapter-link:focus-visible { outline-offset: -2px; }\n.setting { margin-top: 18px; display: grid; gap: 8px; font-size: 14px; }\n.palettes { margin: 18px 0 0; padding: 0; border: 0; }\n.palettes legend { padding: 0; font-size: 14px; }\n.palette-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }\n.palette-group { margin: 10px 0 5px; color: var(--muted); font-size: 12px; }\n.palette-row label {\n  display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 44px;\n  background: var(--paper); color: var(--ink); border: 1px solid var(--muted); border-radius: 5px;\n  cursor: pointer; font: 600 14px var(--serif);\n}\n.palette-row input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }\n.palette-row label:has(:checked) { box-shadow: inset 0 0 0 1px var(--ink); }\n#settings { max-height: calc(100dvh - 28px); overflow-y: auto; }\n.gesture-hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }\n.setting label { display: flex; justify-content: space-between; }\nselect { width: 100%; padding: 8px; background: var(--paper); border: 1px solid var(--line); border-radius: 4px; }\ninput { width: 100%; accent-color: var(--accent); }\n@media (max-width: 760px), (max-height: 540px) and (pointer: coarse) {\n  .layout { grid-template-columns: 1fr; }\n  aside,#sidebar-toggle { display: none; }\n  header { min-height: 46px; gap: 8px; padding-inline: 12px; }\n  header .brand { font-size: 16px; padding-right: 9px; }\n  #reader-close { font-size: 13px; padding-inline: 4px; }\n  #contents-open { display: block; }\n  #contents-open,#settings-open { padding-inline: 6px; min-width: 44px; }\n  #settings-open b { display: none; }\n  article { padding: 32px 22px 40px; }\n  main { scrollbar-gutter: auto; }\n  footer { gap: 2px; padding-inline: max(4px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-right)); }\n  #steps { gap: 4px; }\n  .step { padding-inline: 8px; }\n  .progress { min-width: 42px; font-size: 12px; }\n  #progress-label { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }\n}\n@media(max-width: 350px) {\n  .step { padding-inline: 5px; }\n  #settings-open, #contents-open { font-size: 13px; }\n}\n\n/* In a paged or vertical layout the text area has two definite dimensions. */\n#reader { min-width: 0; min-height: 0; }\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) {\n  scrollbar-gutter: auto; overflow: hidden;\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article {\n  box-sizing: border-box; height: 100%; max-width: 53rem;\n  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr);\n  padding: clamp(12px, 3vh, 32px) clamp(18px, 4vw, 52px);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article:has(#chapter-status:not([hidden])) { grid-template-rows: auto auto auto auto minmax(0, 1fr); }\n#chapter-status { margin: 0 0 8px; color: var(--muted); font-size: 14px; }\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) h1 {\n  margin: 5px 0; font-size: clamp(23px, 3vw, 36px);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) .meta {\n  margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) .prose {\n  min-width: 0; min-height: 0; overflow: auto; padding: 0; border: 0; overflow-anchor: none;\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) #chapter-end { display: none; }\n#reader[data-writing=\"vertical\"] .prose { writing-mode: vertical-rl; text-orientation: mixed; }\n#reader .prose p { margin: 0; }\n#reader .prose p + p { margin-block-start: 1em; }\n#reader[data-mode=\"scroll\"][data-writing=\"horizontal\"] .prose { padding-top: calc(12px + 1em); }\n#reader[data-mode=\"paged\"] .prose { overflow: hidden; touch-action: pan-y pinch-zoom; }\n@media (max-height: 480px) {\n  #reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article {\n    grid-template-rows: auto minmax(0, 1fr); padding-block: 6px;\n  }\n  #reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) :is(.meta, .chapter-label) { display: none; }\n}\n</style>\n</head>\n<body>\n<header>\n  <button type=\"button\" id=\"sidebar-toggle\" class=\"tool\" aria-controls=\"chapter-sidebar\" aria-expanded=\"true\">收合章節欄</button>\n  <span class=\"brand\"><i class=\"brandmark\" aria-hidden=\"true\"></i>KomaGlide</span>\n  <span class=\"header-work\" id=\"header-work\"></span>\n  <button id=\"reader-close\" class=\"tool\" hidden>返回原站</button>\n</header>\n<div class=\"layout\" id=\"reader-layout\">\n  <aside id=\"chapter-sidebar\" aria-label=\"作品與目錄\">\n    <div class=\"cover\"><small id=\"work-source\"></small><strong id=\"work-title\">潮汐郵局</strong></div>\n    <div class=\"contents-title\"><h2>章節目錄</h2><small id=\"chapter-count\"></small></div>\n    <nav id=\"toc\" aria-label=\"章節目錄\"></nav>\n  </aside>\n  <main id=\"reader\" tabindex=\"0\" aria-labelledby=\"chapter-title\">\n    <article>\n      <div class=\"chapter-label\" id=\"number\"></div><h1 id=\"chapter-title\" tabindex=\"-1\"></h1>\n      <p class=\"meta\" id=\"meta\"></p><p id=\"chapter-status\" role=\"status\" hidden></p><div class=\"prose\" id=\"prose\"></div>\n      <div id=\"chapter-end\"></div>\n    </article>\n  </main>\n</div>\n<footer>\n  <button id=\"contents-open\" class=\"tool\" aria-haspopup=\"dialog\">目錄</button>\n  <nav id=\"steps\" aria-label=\"閱讀導覽\">\n    <button class=\"step\" id=\"previous\">上一章</button>\n    <div class=\"progress\"><span id=\"progress-label\">本章進度</span><span id=\"percent\">0%</span><progress id=\"bar\" max=\"100\" value=\"0\" aria-label=\"本章進度\"></progress></div>\n    <button class=\"step\" id=\"next\">下一章</button>\n  </nav>\n  <button id=\"settings-open\" class=\"tool\" aria-haspopup=\"dialog\"><b aria-hidden=\"true\">Aa</b>閱讀設定</button>\n</footer>\n<dialog id=\"contents\" aria-labelledby=\"contents-title\">\n  <div class=\"contents-controls\">\n    <div class=\"dialog-head\"><h2 id=\"contents-title\">章節目錄</h2><button id=\"contents-close\" aria-label=\"關閉目錄\" autofocus>×</button></div>\n    <input class=\"chapter-search\" id=\"chapter-search\" type=\"search\" aria-label=\"搜尋章名或章節序號\"\n      placeholder=\"搜尋章名或章節序號\" enterkeyhint=\"search\" autocomplete=\"off\">\n    <div class=\"contents-actions\">\n      <p id=\"chapter-results\" role=\"status\" aria-atomic=\"true\"></p>\n      <button id=\"locate-chapter\">目前章節</button>\n    </div>\n  </div>\n  <nav id=\"mobile-toc\" aria-label=\"章節清單\"></nav>\n</dialog>\n<dialog id=\"settings\" aria-labelledby=\"settings-title\">\n  <div class=\"dialog-head\"><h2 id=\"settings-title\">閱讀設定</h2><button aria-label=\"關閉設定\">×</button></div>\n  <div class=\"setting\"><label for=\"mode\">閱讀模式</label><select id=\"mode\" aria-describedby=\"gesture-hint\"><option value=\"scroll\">連續捲動</option><option value=\"paged\">逐頁翻閱</option></select><p class=\"gesture-hint\" id=\"gesture-hint\" hidden></p></div>\n  <div class=\"setting\"><label for=\"writing\">文字排列</label><select id=\"writing\"><option value=\"horizontal\">橫排（左起）</option><option value=\"vertical\">直排（右起）</option></select></div>\n  <div class=\"setting\"><label for=\"size\">字級<output id=\"size-output\" for=\"size\"></output></label><input type=\"range\" id=\"size\" min=\"16\" max=\"30\" step=\"1\" value=\"20\"></div>\n  <div class=\"setting\"><label for=\"leading\">行距</label><select id=\"leading\"><option value=\"1.65\">緊湊</option><option value=\"1.95\" selected>標準</option><option value=\"2.25\">寬鬆</option></select></div>\n  <fieldset class=\"palettes\"><legend>閱讀配色</legend>\n    <p class=\"palette-group\" id=\"light-label\">淺色</p>\n    <div class=\"palette-row\" role=\"group\" aria-labelledby=\"light-label\">\n      <label data-theme=\"paper\"><input type=\"radio\" name=\"theme\" value=\"paper\" checked>紙白</label>\n      <label data-theme=\"sepia\"><input type=\"radio\" name=\"theme\" value=\"sepia\">暖茶</label>\n      <label data-theme=\"sage\"><input type=\"radio\" name=\"theme\" value=\"sage\">鼠尾草</label>\n    </div>\n    <p class=\"palette-group\" id=\"dark-label\">深色</p>\n    <div class=\"palette-row\" role=\"group\" aria-labelledby=\"dark-label\">\n      <label data-theme=\"night\"><input type=\"radio\" name=\"theme\" value=\"night\">墨綠</label>\n      <label data-theme=\"navy\"><input type=\"radio\" name=\"theme\" value=\"navy\">午夜藍</label>\n      <label data-theme=\"black\"><input type=\"radio\" name=\"theme\" value=\"black\">純黑</label>\n    </div>\n  </fieldset>\n</dialog>\n\n\n</body>\n</html>\n", 'text/html');
+        const readerDocument = frame.contentDocument;
+        readerDocument.documentElement.replaceWith(readerDocument.importNode(shell.documentElement, true));
+        mountNovelReader(readerDocument, frame.contentWindow, {...source, close, signal:request.signal});
+        frame.contentWindow.focus();
+      } catch (error) {
+        close();
+        throw error;
+      }
+    } catch (error) {
+      active = null;
+      launch.disabled = false;
+      console.warn('[KomaGlide]', error.message);
+      launch.textContent = '載入失敗，重試小說閱讀器';
+      return;
+    }
+    launch.textContent = 'KomaGlide 小說閱讀器';
+  }
+  launch.onclick = open;
+  GM_registerMenuCommand(launch.textContent, open);
+  return true;
+}
 
 
   function detectChapter(root = document, address = new URL(location.href)) {
@@ -4346,7 +4900,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     setLocale(await language);
     GM_registerMenuCommand(t('openKomaGlideLibrary'), openShelf);
     if (location.hash.startsWith(SHELF_HASH)) displayShelf();
-    else runSource();
+    else if (!runCzbooksNovel()) runSource();
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start, {once: true});

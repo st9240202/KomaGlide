@@ -8,12 +8,13 @@ const siteFiles = (await readdir(new URL('src/sites/', root)))
   .filter(name => name.endsWith('.js') && name !== 'generic.js').sort();
 siteFiles.push('generic.js');
 
-const [metadata, template, detectors, i18n, store, events, view, controls, shell, libraryCss, navigationCss, comicZip] = await Promise.all([
+const [metadata, template, detectors, i18n, store, events, view, controls, shell, libraryCss, navigationCss, comicZip, novelTemplate, czbooks] = await Promise.all([
   read('src/userscript.meta'), read('src/userscript.js'), Promise.all(siteFiles.map(name => read('src/sites/' + name))),
   read('library/i18n.js'),
   read('library/store.js'), read('src/shelf-events.js'), read('library/shelf.js'),
   read('library/reader-controls.js'), read('library/index.html'), read('library/library.css'),
-  read('library/reader-navigation.css'), read('library/comic-zip.js')
+  read('library/reader-navigation.css'), read('library/comic-zip.js'),
+  read('docs/prototypes/novel-reader.html'), read('src/novels/czbooks.js')
 ]);
 
 // These modules share a single userscript scope. The library markup and styles
@@ -28,7 +29,12 @@ const shelfDocument = shell
   .replaceAll('offlineLibrary', 'siteLibrary')
   .replaceAll('離線書庫', '本站書庫')
   .replace('準備本站書庫中', '');
+// Share the prototype renderer. The second script supplies demo chapters only.
+const novelRenderer = novelTemplate.match(/<script>\s*(function mountNovelReader[\s\S]*?)<\/script>/)?.[1];
+if (!novelRenderer) throw new Error('找不到小說閱讀器');
+const novelDocument = novelTemplate.replace(/<script>[\s\S]*?<\/script>/g, '');
 const parts = {
+  NOVEL_READER: novelRenderer + '\n' + czbooks.replace('/* INSERT_NOVEL_DOCUMENT */', () => JSON.stringify(novelDocument)),
   I18N: inlineModule(i18n),
   SITE_ADAPTERS: detectors.join('\n'),
   SITE_STORE: inlineModule(store),

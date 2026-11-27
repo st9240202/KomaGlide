@@ -82,6 +82,7 @@
 
   const siteAdapters = [];
   /* INSERT_SITE_ADAPTERS */
+  /* INSERT_NOVEL_READER */
 
   function detectChapter(root = document, address = new URL(location.href)) {
     for (const adapter of siteAdapters) {
@@ -1536,7 +1537,7 @@
     setLocale(await language);
     GM_registerMenuCommand(t('openKomaGlideLibrary'), openShelf);
     if (location.hash.startsWith(SHELF_HASH)) displayShelf();
-    else runSource();
+    else if (!runCzbooksNovel()) runSource();
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start, {once: true});
