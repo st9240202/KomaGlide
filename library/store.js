@@ -156,6 +156,15 @@ export async function putPage(page, blob) {
   useImageBytes = true;
 }
 
+export function readNovelCatalog(workId) {
+  return transaction(['settings'], 'readonly', ({settings}) => request(settings.get(['novelCatalog', workId])));
+}
+
+export function saveNovelCatalog(workId, chapters) {
+  return transaction(['settings'], 'readwrite', ({settings}) =>
+    request(settings.put(chapters.map(({id, title, order, url}) => ({id, title, order, url})), ['novelCatalog', workId])));
+}
+
 export async function putNovelChapter(novel, paragraphs) {
   const key = [novel.site, novel.workId, novel.chapterId];
   const bytes = new TextEncoder().encode(JSON.stringify(paragraphs)).byteLength;

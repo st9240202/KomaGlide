@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.39
+// @version      0.7.40
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  閱讀漫畫與小說、保存漫畫圖片，並從腳本選單開啟本站書庫。
@@ -423,6 +423,15 @@ async function putPage(page, blob) {
   const bytes = await blob.arrayBuffer();
   await save({ bytes, mime: blob.type });
   useImageBytes = true;
+}
+
+function readNovelCatalog(workId) {
+  return transaction(['settings'], 'readonly', ({settings}) => request(settings.get(['novelCatalog', workId])));
+}
+
+function saveNovelCatalog(workId, chapters) {
+  return transaction(['settings'], 'readwrite', ({settings}) =>
+    request(settings.put(chapters.map(({id, title, order, url}) => ({id, title, order, url})), ['novelCatalog', workId])));
 }
 
 async function putNovelChapter(novel, paragraphs) {
@@ -2264,7 +2273,8 @@ siteAdapters.push(function detectGeneric(root, address) {
 
   function mountNovelReader(document, window, source) {
   'use strict';
-  const {chapters, workTitle, loadChapter, initialChapter, close, signal, offline} = source;
+  const {chapters, workTitle, loadChapter, initialChapter, close, signal} = source;
+  let partialCatalog = Boolean(source.refreshCatalog);
   const storageKey = source.storageKey;
   const $ = id => document.getElementById(id);
   const reader = $('reader');
@@ -2278,7 +2288,7 @@ siteAdapters.push(function detectGeneric(root, address) {
   $('work-source').textContent = source.siteName;
   $('work-title').textContent = workTitle;
   $('header-work').textContent = workTitle;
-  const chapterCount = (offline ? '已存 ' : '全 ') + chapters.length + ' 章';
+  let chapterCount = (partialCatalog ? '已存 ' : '全 ') + chapters.length + ' 章';
   $('chapter-count').textContent = chapterCount;
   $('contents-title').textContent = workTitle + ' · 目錄';
   if (close) {
@@ -2429,6 +2439,10 @@ siteAdapters.push(function detectGeneric(root, address) {
       updateProgress();
     }
   }
+  function hasNeighbor(direction) {
+    const next = chapters[current + direction];
+    return next && (!partialCatalog || next.order === chapters[current].order + direction);
+  }
   function updateProgress() {
     const area = scroller();
     const distance = vertical() ? area.scrollWidth - area.clientWidth : area.scrollHeight - area.clientHeight;
@@ -2442,12 +2456,15 @@ siteAdapters.push(function detectGeneric(root, address) {
     const last = !paged() || pageIndex === pages.length - 1;
     $('previous').textContent = first ? '上一章' : '上一頁';
     $('next').textContent = last ? '下一章' : '下一頁';
-    if (offline) {
+    if (partialCatalog) {
       $('previous').setAttribute('aria-label', first ? '上一章（已存）' : '上一頁');
       $('next').setAttribute('aria-label', last ? '下一章（已存）' : '下一頁');
+    } else {
+      $('next').removeAttribute('aria-label');
+      $('previous').removeAttribute('aria-label');
     }
-    $('previous').disabled = first && current === 0;
-    $('next').disabled = last && current === chapters.length - 1;
+    $('previous').disabled = first && !hasNeighbor(-1);
+    $('next').disabled = last && !hasNeighbor(1);
     $('steps').classList.toggle('reverse', paged() && vertical());
   }
   function remember() {
@@ -2474,8 +2491,13 @@ siteAdapters.push(function detectGeneric(root, address) {
         try {
           chapter.paragraphs = await loadChapter(chapter, signal);
         } catch {
-          if (!signal?.aborted) status.textContent = offline
-            ? '無法開啟已存章節，請返回書庫。' : '無法載入章節，請從目錄重試或返回原站。';
+          if (!signal?.aborted) {
+            status.textContent = window.navigator.onLine ? '無法載入「' + chapter.title + '」。' : '離線時無法下載「' + chapter.title + '」。';
+            const retry = document.createElement('button');
+            retry.textContent = '重試';
+            retry.onclick = () => selectChapter(chapters.indexOf(chapter), lastPage, anchor);
+            status.append(retry);
+          }
           return;
         } finally {
           loading = false;
@@ -2484,7 +2506,7 @@ siteAdapters.push(function detectGeneric(root, address) {
         if (signal?.aborted) return;
       }
       status.hidden = true;
-      current = index;
+      current = chapters.indexOf(chapter);
       render(anchor, lastPage);
       remember();
     }
@@ -2499,38 +2521,47 @@ siteAdapters.push(function detectGeneric(root, address) {
     $('meta').textContent = workTitle + '　／　' + length + ' 字' +
       (chapter.cacheFailed ? '　／　' + source.cacheFailure : '');
     locateChapter.disabled = false;
+    updateChapterNavigation();
+    layout(anchor, lastPage);
+  }
+  function updateChapterNavigation() {
     for (const link of document.querySelectorAll('.chapter-link')) {
       if (Number(link.dataset.index) === current) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
     const end = $('chapter-end');
-    if (current === chapters.length - 1) end.textContent = offline ? '這是最後一個已存章節' : '全書完';
+    if (current === chapters.length - 1) end.textContent = partialCatalog ? '這是最後一個已存章節' : '全書完';
     else {
       const next = document.createElement('button');
-      next.textContent = (offline ? '下一個已存章節' : '下一章') + '　' + chapters[current + 1].title + '　→';
+      next.textContent = (partialCatalog ? '下一個已存章節' : '下一章') + '　' + chapters[current + 1].title + '　→';
+      next.disabled = !hasNeighbor(1);
       next.onclick = () => selectChapter(current + 1);
       end.replaceChildren(next);
     }
-    layout(anchor, lastPage);
   }
-  for (const nav of [$('toc'), mobileToc]) {
-    chapters.forEach((chapter, index) => {
-      const button = document.createElement('button');
-      button.className = 'chapter-link';
-      button.dataset.index = index;
-      const num = document.createElement('span');
-      num.className = 'chapter-num';
-      num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
-      const name = document.createElement('span');
-      name.className = 'chapter-name';
-      name.textContent = chapter.title;
-      button.append(num, name);
-      button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
-      nav.append(button);
-    });
+  let chapterRows, chapterTitles;
+  function drawCatalog() {
+    for (const nav of [$('toc'), mobileToc]) {
+      nav.replaceChildren();
+      chapters.forEach((chapter, index) => {
+        const button = document.createElement('button');
+        button.className = 'chapter-link';
+        button.dataset.index = index;
+        const num = document.createElement('span');
+        num.className = 'chapter-num';
+        num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
+        const name = document.createElement('span');
+        name.className = 'chapter-name';
+        name.textContent = chapter.title;
+        button.append(num, name);
+        button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
+        nav.append(button);
+      });
+    }
+    chapterRows = [...mobileToc.children];
+    chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
   }
-  const chapterRows = [...mobileToc.children];
-  const chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
+  drawCatalog();
   function filterChapters() {
     const query = chapterSearch.value.normalize('NFKC').trim().toLowerCase();
     const ordinal = /^\d+$/.test(query) ? Number(query) : null;
@@ -2597,7 +2628,7 @@ siteAdapters.push(function detectGeneric(root, address) {
       readingAnchor = pageStart(target);
       showPage(target);
       remember();
-    } else {
+    } else if (hasNeighbor(direction)) {
       selectChapter(current + direction, paged() && direction < 0);
     }
   }
@@ -2714,6 +2745,38 @@ siteAdapters.push(function detectGeneric(root, address) {
   applySettings();
   const startIndex = entry >= 0 ? entry : Math.max(0, initial);
   void selectChapter(startIndex, false, savedPosition(chapters[startIndex].id));
+  if (source.refreshCatalog) {
+    const cachedIds = new Set(chapters.map(chapter => chapter.id));
+    let generation = 0;
+    function refresh() {
+      const version = ++generation;
+      source.refreshCatalog(signal, entries => {
+        if (signal.aborted || version !== generation) return;
+        const active = chapters[current];
+        const previous = new Map(chapters.map(item => [item.id, item]));
+        const updated = entries.map(entry => Object.assign(previous.get(entry.id) || {}, entry));
+        const ids = new Set(updated.map(item => item.id));
+        for (const item of chapters) {
+          if (!ids.has(item.id) && (cachedIds.has(item.id) || item.paragraphs || loading)) updated.push(item);
+        }
+        chapters.splice(0, chapters.length);
+        for (const item of updated) chapters.push(item);
+        current = chapters.indexOf(active);
+        partialCatalog = false;
+        chapterCount = '全 ' + chapters.length + ' 章';
+        $('chapter-count').textContent = chapterCount;
+        drawCatalog();
+        filterChapters();
+        if (current >= 0) {
+          $('number').textContent = '第 ' + chapters[current].order + ' 章';
+          updateChapterNavigation();
+          if (!loading) updateProgress();
+        }
+      }).catch(() => { /* Keep the available catalog when the site is unreachable. */ });
+    }
+    refresh();
+    window.addEventListener('online', refresh, {signal});
+  }
   let saveTimer;
   for (const area of (source.nativeScroll ? [reader, prose, document] : [reader, prose])) {
     area.addEventListener('scroll', () => {
@@ -2747,6 +2810,74 @@ const CZBOOKS_SITE = '小說狂人';
 const czbooksNovelStorageKey = workId => PREFIX + 'novel.czbooks.' + workId;
 let disposeSourceNovel;
 
+async function readCzbooksPage(url, signal) {
+  const response = await fetch(url, {signal, mode: 'same-origin'});
+  if (!response.ok) throw new Error('HTTP ' + response.status);
+  return new DOMParser().parseFromString(await response.text(), 'text/html');
+}
+
+function czbooksParagraphs(doc) {
+  const body = doc.querySelector('.chapter-detail .content');
+  if (!body) throw new Error('找不到小說正文');
+  const clean = body.cloneNode(true);
+  clean.querySelectorAll('script,style,iframe,ins,noscript,[hidden],[aria-hidden="true"]').forEach(node => node.remove());
+  for (const br of clean.querySelectorAll('br')) br.replaceWith('\n');
+  for (const block of clean.querySelectorAll('p,div')) block.after('\n');
+  const paragraphs = clean.textContent.split(/\n+/).map(line => line.trim()).filter(Boolean);
+  const chapterTitle = doc.querySelector('.chapter-detail h1.name')?.textContent.trim()
+    .replace(/^《[^》]+》\s*(?:\d+\.\s*)?/, '');
+  if (chapterTitle && paragraphs[0] === chapterTitle) paragraphs.shift();
+  if (/^[（(]本章完[）)]$/.test(paragraphs.at(-1))) paragraphs.pop();
+  if (!paragraphs.length) throw new Error('小說正文是空的');
+  return paragraphs;
+}
+
+function czbooksCatalog(catalog, bookUrl, workId, chapterId) {
+  const chapters = new Map();
+  for (const link of catalog.querySelectorAll('#chapter-list a[href]')) {
+    const url = webUrl(link.getAttribute('href'), bookUrl);
+    if (url?.origin !== bookUrl.origin) continue;
+    const parts = url.pathname.split('/');
+    const id = parts[3];
+    const name = link.textContent.trim().replace(/^\d+\.\s*/, '');
+    if (parts.length !== 4 || parts[1] !== 'n' || parts[2] !== workId ||
+        !/^[a-z0-9]+$/i.test(id) || !name || chapters.has(id)) continue;
+    url.hash = '';
+    chapters.set(id, {id, title: name, url: url.href});
+  }
+  if (!chapters.size || (chapterId && !chapters.has(chapterId))) throw new Error('找不到章節目錄');
+  const ordered = [...chapters.values()];
+  ordered.forEach((chapter, index) => { chapter.order = index + 1; });
+  return ordered;
+}
+
+function czbooksLoader(workId, workTitle, chapterId, root) {
+  return async (chapter, abortSignal) => {
+    const key = [CZBOOKS_SITE, workId, chapter.id];
+    if (chapter.id !== chapterId) {
+      const cached = await readNovelChapter(key).catch(() => null);
+      abortSignal.throwIfAborted();
+      if (cached) return cached;
+    }
+    if (!navigator.onLine && chapter.id !== chapterId) throw new Error('離線時無法下載本章。');
+    const paragraphs = czbooksParagraphs(chapter.id === chapterId ? root : await readCzbooksPage(chapter.url, abortSignal));
+    abortSignal.throwIfAborted();
+    try {
+      await putNovelChapter({
+        site: CZBOOKS_SITE, workId, chapterId: chapter.id, workTitle,
+        chapterTitle: chapter.title, order: chapter.order
+      }, paragraphs);
+    } catch (error) {
+      chapter.cacheFailed = true;
+      console.warn('[KomaGlide]', error.message);
+      return paragraphs;
+    }
+    getShelfEvents().announce({kind: 'novel-saved'});
+    void rememberSite();
+    return paragraphs;
+  };
+}
+
 function detectCzbooks(root, address) {
   if (address.hostname !== 'czbooks.net') return null;
   const route = /^\/n\/([a-z0-9]+)(?:\/([a-z0-9]+))?\/?$/i.exec(address.pathname);
@@ -2759,78 +2890,17 @@ function detectCzbooks(root, address) {
   const wrappedTitle = /^《([^》]+)》/.exec(title.textContent.trim());
   const workTitle = wrappedTitle?.[1] || title.textContent.trim().replace(/\s*《目錄》$/, '');
 
-  async function readPage(url, signal) {
-    const response = await fetch(url, {signal, mode: 'same-origin'});
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    return new DOMParser().parseFromString(await response.text(), 'text/html');
-  }
-
-  function chapterText(doc) {
-    const body = doc.querySelector('.chapter-detail .content');
-    if (!body) throw new Error('找不到小說正文');
-    const clean = body.cloneNode(true);
-    clean.querySelectorAll('script,style,iframe,ins,noscript,[hidden],[aria-hidden="true"]').forEach(node => node.remove());
-    for (const br of clean.querySelectorAll('br')) br.replaceWith('\n');
-    for (const block of clean.querySelectorAll('p,div')) block.after('\n');
-    const paragraphs = clean.textContent.split(/\n+/).map(line => line.trim()).filter(Boolean);
-    const chapterTitle = doc.querySelector('.chapter-detail h1.name')?.textContent.trim()
-      .replace(/^《[^》]+》\s*(?:\d+\.\s*)?/, '');
-    if (chapterTitle && paragraphs[0] === chapterTitle) paragraphs.shift();
-    if (/^[（(]本章完[）)]$/.test(paragraphs.at(-1))) paragraphs.pop();
-    if (!paragraphs.length) throw new Error('小說正文是空的');
-    return paragraphs;
-  }
-
   return {
     title,
     async open(signal) {
-      const catalog = chapterId ? await readPage(bookUrl.href, signal) : root;
-      const chapters = new Map();
-      for (const link of catalog.querySelectorAll('#chapter-list a[href]')) {
-        const url = webUrl(link.getAttribute('href'), bookUrl);
-        if (url?.origin !== bookUrl.origin) continue;
-        const parts = url.pathname.split('/');
-        const id = parts[3];
-        const name = link.textContent.trim().replace(/^\d+\.\s*/, '');
-        if (parts.length !== 4 || parts[1] !== 'n' || parts[2] !== workId ||
-            !/^[a-z0-9]+$/i.test(id) || !name || chapters.has(id)) continue;
-        url.hash = '';
-        chapters.set(id, {id, title: name, url: url.href});
-      }
-      if (!chapters.size || (chapterId && !chapters.has(chapterId))) throw new Error('找不到章節目錄');
+      const catalog = chapterId ? await readCzbooksPage(bookUrl.href, signal) : root;
+      const chapters = czbooksCatalog(catalog, bookUrl, workId, chapterId);
+      await saveNovelCatalog(workId, chapters).catch(() => {});
       void write(PREFIX + 'novel-shelf-entry', bookUrl.href).catch(() => {});
-      const ordered = [...chapters.values()];
-      ordered.forEach((chapter, index) => { chapter.order = index + 1; });
       return {
-        chapters: ordered,
-        workTitle,
-        siteName: CZBOOKS_SITE,
-        initialChapter: chapterId,
-        storageKey: czbooksNovelStorageKey(workId),
-        cacheFailure: t('novelCacheFailed'),
-        async loadChapter(chapter, abortSignal) {
-          const key = [CZBOOKS_SITE, workId, chapter.id];
-          if (chapter.id !== chapterId) {
-            const cached = await readNovelChapter(key).catch(() => null);
-            abortSignal.throwIfAborted();
-            if (cached) return cached;
-          }
-          const paragraphs = chapterText(chapter.id === chapterId ? root : await readPage(chapter.url, abortSignal));
-          abortSignal.throwIfAborted();
-          try {
-            await putNovelChapter({
-              site: CZBOOKS_SITE, workId, chapterId: chapter.id, workTitle,
-              chapterTitle: chapter.title, order: chapter.order
-            }, paragraphs);
-          } catch (error) {
-            chapter.cacheFailed = true;
-            console.warn('[KomaGlide]', error.message);
-            return paragraphs;
-          }
-          getShelfEvents().announce({kind: 'novel-saved'});
-          void rememberSite();
-          return paragraphs;
-        },
+        chapters, workTitle, siteName: CZBOOKS_SITE, initialChapter: chapterId,
+        storageKey: czbooksNovelStorageKey(workId), cacheFailure: t('novelCacheFailed'),
+        loadChapter: czbooksLoader(workId, workTitle, chapterId, root),
       };
     },
   };
@@ -2897,17 +2967,26 @@ function showNovelReader(source, request, onClose) {
 function openShelfNovel(chapter, related, close) {
   const [site, workId, initialChapter] = chapter.key;
   return showNovelReader({
-    chapters: related.map(item => ({id: item.key[2], title: item.chapterTitle, order: item.order})),
+    chapters: related.map(item => ({id: item.key[2], title: item.chapterTitle, order: item.order,
+      url: new URL('/n/' + encodeURIComponent(workId) + '/' + encodeURIComponent(item.key[2]), location.origin).href})),
     workTitle: chapter.workTitle,
     siteName: site,
     initialChapter,
     storageKey: czbooksNovelStorageKey(workId),
-    offline: true,
     closeLabel: t('backToLibrary'),
-    async loadChapter(item) {
-      const paragraphs = await readNovelChapter([site, workId, item.id]);
-      if (!paragraphs) throw new Error(t('chapterRemoved'));
-      return paragraphs;
+    cacheFailure: t('novelCacheFailed'),
+    loadChapter: czbooksLoader(workId, chapter.workTitle),
+    async refreshCatalog(signal, update) {
+      const saved = await readNovelCatalog(workId).catch(() => null);
+      if (signal.aborted) return;
+      if (saved?.length) update(saved);
+      if (!navigator.onLine) return;
+      const bookUrl = new URL('/n/' + encodeURIComponent(workId), location.origin);
+      const page = await readCzbooksPage(bookUrl.href, signal);
+      const fresh = czbooksCatalog(page, bookUrl, workId);
+      signal.throwIfAborted();
+      update(fresh);
+      await saveNovelCatalog(workId, fresh);
     },
   }, new AbortController(), close);
 }

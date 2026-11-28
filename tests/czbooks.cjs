@@ -55,7 +55,7 @@ async function verifyStore(page) {
     };
   }, novelKey);
   assert.deepEqual(stats, {
-    before: stats.textBytes * 2, after: stats.textBytes + 5, textBytes: stats.textBytes, exportRejected: true,
+    before: stats.textBytes * 3, after: stats.textBytes + 5, textBytes: stats.textBytes, exportRejected: true,
     first: true, third: false, comic: true,
   });
 }
@@ -131,6 +131,21 @@ async function run(ios) {
     await other.goto(novelShelf);
     await other.getByRole('heading', {name: '小說書庫', exact: true}).waitFor();
     await other.getByText('小說狂人 · 已存 2 章').waitFor();
+    // Simulate a book cached by a version that stored text but no catalog.
+    await page.evaluate(async () => (await import('/store.js')).saveNovelCatalog('sample', []));
+    let releaseCatalog;
+    const gate = new Promise(resolve => { releaseCatalog = resolve; });
+    await other.route(catalog, async route => {
+      await gate;
+      await route.fallback();
+    });
+    await other.getByRole('link', {name: '潮聲'}).click();
+    const otherReader = ios ? other : other.frameLocator('iframe[title="KomaGlide 小說閱讀器"]');
+    await otherReader.getByText(body(1)).waitFor();
+    assert.equal(await otherReader.locator('#next').isDisabled(), true, 'Wait for the missing catalog entry instead of skipping a chapter');
+    releaseCatalog();
+    await otherReader.locator('#toc .chapter-link').filter({hasText: '候船室'}).waitFor({state: 'attached'});
+    await page.waitForFunction(async () => (await (await import('/store.js')).readNovelCatalog('sample'))?.length === 3);
     await other.close();
 
     await page.reload();
@@ -145,12 +160,25 @@ async function run(ios) {
     assert.ok(await reader.locator('#reader').evaluate(element =>
       Math.max(element.scrollTop, element.ownerDocument.scrollingElement.scrollTop)) > 300,
       'Opening a previously read chapter from the offline shelf restores its text position');
+    await reader.locator('#toc .chapter-link').filter({hasText: '候船室'}).waitFor({state: 'attached'});
+    assert.deepEqual(fetched, [1, 3], 'The full catalog does not prefetch any chapter text');
+    await reader.locator('#next').click();
+    await reader.getByRole('button', {name: '重試'}).waitFor();
+    assert.equal(await reader.locator('#chapter-title').innerText(), '潮聲');
+    await context.setOffline(false);
+    await reader.getByRole('button', {name: '重試'}).click();
+    await reader.getByText(body(2)).waitFor();
+    assert.deepEqual(fetched, [1, 3, 2], 'Retry downloads just the missing chapter');
+    await context.setOffline(true);
     await reader.locator('#next').click();
     await reader.getByText(body(3)).waitFor();
     await reader.getByText('第 3 章', {exact: true}).waitFor();
     await reader.getByRole('button', {name: '返回書庫'}).click();
     await page.getByRole('heading', {name: '潮汐小說'}).waitFor();
-    assert.deepEqual(fetched, [1, 3], 'No chapter requests were made while reading from the shelf');
+    await page.getByRole('link', {name: '候船室'}).click();
+    await reader.getByText(body(2)).waitFor();
+    await reader.getByRole('button', {name: '返回書庫'}).click();
+    assert.deepEqual(fetched, [1, 3, 2], 'Downloaded chapter can be reopened offline');
 
     await page.getByRole('button', {name: '收藏本章'}).first().click();
     await page.getByRole('button', {name: '已收藏本章', exact: true}).waitFor();
