@@ -111,19 +111,17 @@ async function run(ios) {
 
     const page = await context.newPage();
     await page.goto(catalog);
-    await page.waitForFunction(() => window.commands.has('開啟 KomaGlide 書庫') && window.commands.has('KomaGlide 小說閱讀器'));
+    const launch = page.getByRole('button', {name: 'KomaGlide 小說閱讀器', exact: true});
+    await launch.waitFor();
     await page.addScriptTag({path: dist});
-    assert.equal(await page.getByRole('button', {name: 'KomaGlide 小說閱讀器'}).count(), 1);
-    await page.evaluate(() => {
-      const open = window.commands.get('KomaGlide 小說閱讀器');
-      return Promise.all([open(), open()]);
-    });
+    assert.equal(await launch.count(), 1);
+    await launch.evaluate(button => { button.click(); button.click(); });
     const reader = ios ? page : page.frameLocator('iframe[title="KomaGlide 小說閱讀器"]');
     await reader.getByText(body(1)).waitFor();
     await page.addScriptTag({path: dist});
     assert.equal(await reader.locator('#reader').count(), 1);
     const registrations = await page.evaluate(() => window.registrations);
-    assert.equal(new Set(registrations).size, registrations.length, 'Each menu entry is registered only once');
+    assert.deepEqual(registrations, ['開啟 KomaGlide 書庫', '小說書庫'], 'The reader has a single entry on the page');
     if (ios) {
       assert.equal(await page.evaluate(() => {
         window.scrollTo(0, 300);

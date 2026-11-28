@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.42
+// @version      0.7.43
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  閱讀漫畫與小說、保存漫畫圖片，並從腳本選單開啟本站書庫。
@@ -3042,7 +3042,6 @@ function runCzbooksNovel() {
     launch.textContent = 'KomaGlide 小說閱讀器';
   }
   launch.onclick = open;
-  registerMenu(launch.textContent, open);
   return true;
 }
 
