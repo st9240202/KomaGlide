@@ -30,6 +30,24 @@ function installManager(stayStyle) {
   }
 }
 
+async function swipeAtChapterEnd(page, reader) {
+  await reader.locator('#reader').evaluate(element => {
+    const doc = element.ownerDocument;
+    const area = doc.documentElement.classList.contains('native-scroll') ? doc.scrollingElement : element;
+    area.scrollTop = area.scrollHeight;
+  });
+  const box = await reader.locator('#chapter-end button').boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x, y}]});
+    for (const delta of [15, 38, 72, 115]) {
+      await session.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x, y: y - delta}]});
+    }
+    await session.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+  } finally { await session.detach(); }
+}
+
 async function verifyStore(page) {
   const stats = await page.evaluate(async novelKey => {
     const {putNovelChapter, putPage, readNovelChapter, readExportChapters, setLimit, shelf} = await import('/store.js');
@@ -162,7 +180,7 @@ async function run(ios) {
       'Opening a previously read chapter from the offline shelf restores its text position');
     await reader.locator('#toc .chapter-link').filter({hasText: '候船室'}).waitFor({state: 'attached'});
     assert.deepEqual(fetched, [1, 3], 'The full catalog does not prefetch any chapter text');
-    await reader.locator('#next').click();
+    await swipeAtChapterEnd(page, reader);
     await reader.getByRole('button', {name: '重試'}).waitFor();
     assert.equal(await reader.locator('#chapter-title').innerText(), '潮聲');
     await context.setOffline(false);
@@ -170,7 +188,7 @@ async function run(ios) {
     await reader.getByText(body(2)).waitFor();
     assert.deepEqual(fetched, [1, 3, 2], 'Retry downloads just the missing chapter');
     await context.setOffline(true);
-    await reader.locator('#next').click();
+    await swipeAtChapterEnd(page, reader);
     await reader.getByText(body(3)).waitFor();
     await reader.getByText('第 3 章', {exact: true}).waitFor();
     await reader.getByRole('button', {name: '返回書庫'}).click();

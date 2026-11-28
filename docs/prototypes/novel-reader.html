@@ -664,38 +664,52 @@ function mountNovelReader(document, window, source) {
     const area = scroller();
     const remaining = vertical() ? area.scrollWidth - area.clientWidth - Math.abs(area.scrollLeft) :
       area.scrollHeight - area.clientHeight - area.scrollTop;
-    return remaining <= 2;
+    if (remaining <= 3 || vertical()) return remaining <= 3;
+    // The chapter link and bottom padding can extend past the last line of text.
+    const bottom = nativeScroll() ? document.querySelector('footer').getBoundingClientRect().top :
+      reader.getBoundingClientRect().bottom;
+    return prose.getBoundingClientRect().bottom <= bottom + 3;
   }
   reader.addEventListener('touchstart', event => {
     clearGesture();
     if (event.touches.length !== 1 || readingZoomed() || hasSelection() || loading || current < 0) return;
-    if (paged() ? !prose.contains(event.target) : event.target.closest('button,a,input,select')) return;
+    if (paged() ? !prose.contains(event.target) : event.target.closest('button,a,input,select') && !event.target.closest('#chapter-end')) return;
     if (!paged() && (current + 1 >= chapters.length || !atChapterEnd())) return;
     const touch = event.touches[0];
-    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false, chapter: current, paged: paged(), vertical: vertical()};
+    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false, chapter: chapters[current].id, paged: paged(), vertical: vertical()};
   }, {passive:true});
+  function strongEndSwipe(dx, dy, elapsed) {
+    const distance = vertical() ? dx : -dy;
+    const across = vertical() ? dy : dx;
+    return distance >= 64 && distance > Math.abs(across) * 1.5 && distance >= elapsed * 0.3;
+  }
   reader.addEventListener('touchmove', event => {
     if (!gesture) return;
     const touch = event.touches[0];
     if (!touch || event.touches.length !== 1 || touch.identifier !== gesture.id) return clearGesture();
-    if (Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > 12) gesture.moved = true;
-  }, {passive:true});
+    const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
+    if (Math.hypot(dx, dy) > 12) gesture.moved = true;
+    if (gesture.paged || gesture.chapter !== chapters[current]?.id || paged() ||
+        gesture.vertical !== vertical() || readingZoomed() || hasSelection()) return;
+    const forward = vertical() ? dx : -dy;
+    if (forward > Math.abs(vertical() ? dy : dx) * 1.5 && event.cancelable) event.preventDefault();
+    if (strongEndSwipe(dx, dy, event.timeStamp - gesture.time) && hasNeighbor(1)) {
+      clearGesture();
+      step(1);
+    }
+  }, {passive:false});
   reader.addEventListener('contextmenu', clearGesture);
   reader.addEventListener('touchcancel', clearGesture, {passive:true});
   reader.addEventListener('touchend', event => {
     const start = gesture;
     clearGesture();
-    if (!start || event.touches.length || start.chapter !== current || start.paged !== paged() ||
+    if (!start || event.touches.length || start.chapter !== chapters[current]?.id || start.paged !== paged() ||
         start.vertical !== vertical() || readingZoomed() || hasSelection()) return;
     const touch = event.changedTouches[0];
     if (touch.identifier !== start.id) return;
     const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
     if (!paged()) {
-      const distance = vertical() ? dx : -dy;
-      const across = vertical() ? dy : dx;
-      const duration = event.timeStamp - start.time;
-      if (atChapterEnd() && distance >= 64 && distance > Math.abs(across) * 1.5 &&
-          distance >= duration * 0.3) step(1);
+      if (strongEndSwipe(dx, dy, event.timeStamp - start.time)) step(1);
       return;
     }
     const forward = vertical() ? -1 : 1;
