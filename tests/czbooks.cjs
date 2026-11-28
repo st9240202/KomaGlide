@@ -18,7 +18,11 @@ function installManager(stayStyle) {
     getValue: async (key, fallback) => values.get(key) ?? fallback,
     setValue: async (key, value) => { values.set(key, value); },
   };
-  const register = (name, callback) => window.commands.set(name, callback);
+  window.registrations = [];
+  const register = (name, callback) => {
+    window.registrations.push(name);
+    window.commands.set(name, callback);
+  };
   const openTab = url => { window.shelfUrl = url; };
   if (stayStyle) {
     window.GM.getValue = (key, fallback) => values.get(key) ?? fallback;
@@ -108,9 +112,18 @@ async function run(ios) {
     const page = await context.newPage();
     await page.goto(catalog);
     await page.waitForFunction(() => window.commands.has('開啟 KomaGlide 書庫') && window.commands.has('KomaGlide 小說閱讀器'));
-    await page.getByRole('button', {name: 'KomaGlide 小說閱讀器'}).click();
+    await page.addScriptTag({path: dist});
+    assert.equal(await page.getByRole('button', {name: 'KomaGlide 小說閱讀器'}).count(), 1);
+    await page.evaluate(() => {
+      const open = window.commands.get('KomaGlide 小說閱讀器');
+      return Promise.all([open(), open()]);
+    });
     const reader = ios ? page : page.frameLocator('iframe[title="KomaGlide 小說閱讀器"]');
     await reader.getByText(body(1)).waitFor();
+    await page.addScriptTag({path: dist});
+    assert.equal(await reader.locator('#reader').count(), 1);
+    const registrations = await page.evaluate(() => window.registrations);
+    assert.equal(new Set(registrations).size, registrations.length, 'Each menu entry is registered only once');
     if (ios) {
       assert.equal(await page.evaluate(() => {
         window.scrollTo(0, 300);

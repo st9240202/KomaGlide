@@ -1588,7 +1588,15 @@
 
   const language = read(languageKey).catch(() => null);
   async function start() {
-    setLocale(await language);
+    const localePreference = await language;
+    // Stay can inject the script again in a separate JavaScript context.
+    // The document element is shared by those contexts.
+    if (!location.hash.startsWith(SHELF_HASH)) {
+      const root = document.documentElement;
+      if (root.hasAttribute('data-komaglide-started')) return;
+      root.setAttribute('data-komaglide-started', '');
+    }
+    setLocale(localePreference);
     registerMenu(t('openKomaGlideLibrary'), openShelf);
     registerMenu(t('novelShelf'), openNovelShelf);
     if (location.hash.startsWith(SHELF_HASH)) displayShelf();

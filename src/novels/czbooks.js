@@ -106,6 +106,7 @@ function showNovelReader(source, request, onClose) {
     const original = document.documentElement;
     const scroll = [window.scrollX, window.scrollY];
     const root = document.importNode(shell.documentElement, true);
+    root.setAttribute('data-komaglide-started', '');
     original.replaceWith(root);
     function dispose() {
       if (request.signal.aborted) return;
