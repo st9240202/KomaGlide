@@ -11,15 +11,23 @@ const novelKey = ['小說狂人', 'sample'];
 const libraryPath = path.resolve(__dirname, '../library');
 const dist = path.resolve(__dirname, '../dist/komaglide.user.js');
 
-function installManager() {
+function installManager(stayStyle) {
   const values = new Map();
   window.commands = new Map();
   window.GM = {
     getValue: async (key, fallback) => values.get(key) ?? fallback,
     setValue: async (key, value) => { values.set(key, value); },
   };
-  window.GM_registerMenuCommand = (name, callback) => window.commands.set(name, callback);
-  window.GM_openInTab = url => { window.shelfUrl = url; };
+  const register = (name, callback) => window.commands.set(name, callback);
+  const openTab = url => { window.shelfUrl = url; };
+  if (stayStyle) {
+    window.GM.getValue = (key, fallback) => values.get(key) ?? fallback;
+    window.GM.registerMenuCommand = register;
+    window.GM.openInTab = openTab;
+  } else {
+    window.GM_registerMenuCommand = register;
+    window.GM_openInTab = openTab;
+  }
 }
 
 async function verifyStore(page) {
@@ -57,7 +65,7 @@ async function run(ios) {
   try {
     const context = await browser.newContext({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true,
       ...(ios ? {userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS like Mac OS X) AppleWebKit/605.1.15"} : {})});
-    await context.addInitScript(installManager);
+    await context.addInitScript(installManager, ios);
     await context.addInitScript({path: dist});
     const fetched = [];
     await context.route(origin + '/**', route => {
@@ -81,6 +89,7 @@ async function run(ios) {
 
     const page = await context.newPage();
     await page.goto(catalog);
+    await page.waitForFunction(() => window.commands.has('開啟 KomaGlide 書庫') && window.commands.has('KomaGlide 小說閱讀器'));
     await page.getByRole('button', {name: 'KomaGlide 小說閱讀器'}).click();
     const reader = ios ? page : page.frameLocator('iframe[title="KomaGlide 小說閱讀器"]');
     await reader.getByText(body(1)).waitFor();

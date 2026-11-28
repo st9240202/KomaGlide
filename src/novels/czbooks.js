@@ -202,6 +202,6 @@ function runCzbooksNovel() {
     launch.textContent = 'KomaGlide 小說閱讀器';
   }
   launch.onclick = open;
-  GM_registerMenuCommand(launch.textContent, open);
+  registerMenu(launch.textContent, open);
   return true;
 }

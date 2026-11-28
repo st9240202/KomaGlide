@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.35
+// @version      0.7.37
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  閱讀漫畫與小說、保存漫畫圖片，並從腳本選單開啟本站書庫。
@@ -13,10 +13,14 @@
 // @noframes
 // @run-at       document-start
 // @grant        GM.getValue
+// @grant        GM_getValue
 // @grant        GM.setValue
+// @grant        GM_setValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_openInTab
+// @grant        GM.openInTab
 // @grant        GM_registerMenuCommand
+// @grant        GM.registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      imgs.xkcd.com

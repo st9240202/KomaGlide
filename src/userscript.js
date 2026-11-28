@@ -6,8 +6,16 @@
   const SHELF_HASH = '#komaglide/';
   const IMAGE_LIMIT = 32 * 1024 * 1024;
   const MIME = /^image\/(?:jpeg|png|apng|webp|gif|avif|bmp|x-icon)$/i;
-  const read = key => GM.getValue(key, null);
-  const write = (key, value) => GM.setValue(key, value);
+  const manager = typeof GM === 'undefined' ? {} : GM;
+  const read = async key => typeof manager.getValue === 'function'
+    ? manager.getValue(key, null) : GM_getValue(key, null);
+  const write = async (key, value) => typeof manager.setValue === 'function'
+    ? manager.setValue(key, value) : GM_setValue(key, value);
+
+  function registerMenu(label, action) {
+    if (typeof manager.registerMenuCommand === 'function') return manager.registerMenuCommand(label, action);
+    return GM_registerMenuCommand(label, action);
+  }
 
   function webUrl(value, base = document.baseURI) {
     if (!value) return null;
@@ -60,7 +68,9 @@
       entry = saved && saved.origin === last.origin ? saved : new URL(location.href);
     }
     entry.hash = SHELF_HASH + 'shelf';
-    GM_openInTab(entry.href, {active: true, setParent: false});
+    const options = {active: true, setParent: false};
+    if (typeof manager.openInTab === 'function') return manager.openInTab(entry.href, options);
+    return GM_openInTab(entry.href, options);
   }
 
   function displayShelf() {
@@ -1351,7 +1361,7 @@
       }, {once:true});
       overlayFlow = createFlow(dialog, chapter, dialog, {...view, parallelPreload});
     }
-    GM_registerMenuCommand(t('verticalReader'), openReader);
+    registerMenu(t('verticalReader'), openReader);
     return {
       openReader,
       update(value) {
@@ -1397,7 +1407,9 @@
     let chapterTotal;
     let statusRevision = 0;
     let statusTimer;
-    GM_addValueChangeListener(AUTO, (_name, _old, value) => applyAuto(value));
+    if (typeof GM_addValueChangeListener === 'function') {
+      GM_addValueChangeListener(AUTO, (_name, _old, value) => applyAuto(value));
+    }
     void read(AUTO).then(applyAuto);
 
     function show(text, error) { controls?.show(text, error); }
@@ -1547,7 +1559,7 @@
   const language = read(languageKey).catch(() => null);
   async function start() {
     setLocale(await language);
-    GM_registerMenuCommand(t('openKomaGlideLibrary'), openShelf);
+    registerMenu(t('openKomaGlideLibrary'), openShelf);
     if (location.hash.startsWith(SHELF_HASH)) displayShelf();
     else if (!runCzbooksNovel()) runSource();
   }
