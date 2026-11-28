@@ -156,6 +156,30 @@ export async function putPage(page, blob) {
   useImageBytes = true;
 }
 
+export async function putNovelChapter(novel, paragraphs) {
+  const key = [novel.site, novel.workId, novel.chapterId];
+  const bytes = new TextEncoder().encode(JSON.stringify(paragraphs)).byteLength;
+  return transaction(stores, 'readwrite', async tables => {
+    const [state, previous] = await Promise.all([
+      readState(tables.settings), request(tables.chapters.get(key))
+    ]);
+    if (bytes > state.limit) throw new Error(t('chapterTooLarge'));
+    const delta = bytes - (previous?.bytes || 0);
+    await makeRoom(tables, state, state.used + delta - state.limit, key);
+    const chapter = {
+      key, kind: 'novel', workKnown: true, favorite: previous?.favorite ?? false,
+      workTitle: novel.workTitle, chapterTitle: novel.chapterTitle, order: novel.order, bytes
+    };
+    // A novel chapter has one text record. The existing compound key range
+    // lets the same eviction transaction remove either text or image records.
+    tables.pages.put({ paragraphs }, [...key, 1]);
+    state.used += delta;
+    touch(state, chapter);
+    tables.chapters.put(chapter, key);
+    tables.settings.put(state, 'storage');
+  });
+}
+
 // Keep saved pages readable when the browser can no longer commit recency data.
 async function chapterRead(key, read) {
   async function run(tables) {
@@ -181,7 +205,8 @@ async function chapterRead(key, read) {
 export async function lookupPage(page, includeBlob) {
   const key = identity(page);
   const pageKey = [...key, page.index];
-  const data = await chapterRead(key, pages => request(includeBlob ? pages.get(pageKey) : pages.getKey(pageKey)));
+  const data = await chapterRead(key, (pages, chapter) =>
+    chapter.kind === 'novel' ? null : request(includeBlob ? pages.get(pageKey) : pages.getKey(pageKey)));
   if (!includeBlob) return { exists: !!data };
   return { exists: !!data, blob: data ? storedImage(data) : null };
 }
@@ -194,7 +219,7 @@ export async function readExportChapters(keys, validate, signal) {
   return transaction(['chapters', 'pages'], 'readonly', async tables => {
     const chapters = await Promise.all(keys.map(key => request(tables.chapters.get(key))));
     signal.throwIfAborted();
-    if (chapters.some(chapter => !chapter?.count)) throw new Error(t('exportChapterMissing'));
+    if (chapters.some(chapter => !chapter?.count || chapter.kind === 'novel')) throw new Error(t('exportChapterMissing'));
     validate(chapters);
     const result = [];
     for (const chapter of chapters) {
@@ -254,8 +279,16 @@ export async function setChapterSubtitle(key, subtitle) {
 
 export async function readChapter(key) {
   return chapterRead(key, async (pages, chapter) => {
+    if (chapter.kind === 'novel') return { chapter };
     const keys = await request(pages.getAllKeys(indices(key)));
     return { chapter, indices: keys.map(pageKey => pageKey[3]) };
+  });
+}
+
+export async function readNovelChapter(key) {
+  return chapterRead(key, async (pages, chapter) => {
+    if (chapter.kind !== 'novel') return null;
+    return (await request(pages.get([...key, 1])))?.paragraphs ?? null;
   });
 }
 

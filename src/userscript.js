@@ -25,7 +25,7 @@
   /* INSERT_COMIC_ZIP */
   /* INSERT_SHELF_VIEW */
 
-  // Remember the page that can host each site's shelf. Comic bytes stay in that site's IndexedDB.
+  // Remember the page that can host each site's shelf. Cached content stays in that site's IndexedDB.
   let rememberedSite = false;
   async function rememberSite() {
     if (rememberedSite) return;
@@ -42,6 +42,15 @@
   }
 
   async function openShelf() {
+    if (location.hostname === 'czbooks.net' && !navigator.onLine) {
+      if (location.hash.startsWith(SHELF_HASH)) {
+        location.hash = SHELF_HASH + 'shelf';
+      } else {
+        history.replaceState(history.state, '', SHELF_HASH + 'shelf');
+        displayShelf();
+      }
+      return;
+    }
     const siteEntry = origin => read(PREFIX + 'shelf-entry.' + origin);
     const current = webUrl(await siteEntry(location.origin));
     let entry = current?.origin === location.origin ? current : null;
@@ -55,7 +64,9 @@
   }
 
   function displayShelf() {
-    // This explicitly opened tab uses the comic site's storage origin. Its UI is bundled.
+    // The shelf uses the source site's storage origin. Its UI is bundled.
+    disposeSourceNovel?.();
+    disposeSourceNovel = undefined;
     // The chapter document has finished parsing. Drop its event handlers and
     // install the bundled DOM before mounting controls or observing page slots.
     const shell = new DOMParser().parseFromString(/* INSERT_SHELF_DOCUMENT */, 'text/html');
@@ -67,6 +78,7 @@
     mountShelf(SHELF_HASH, {
       ...getShelfEvents(),
       saveLanguage: value => write(languageKey, value),
+      openNovel: openShelfNovel,
     });
     document.getElementById('offline-state').textContent = location.host;
   }

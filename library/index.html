@@ -54,7 +54,7 @@
           <a id="export-download" class="nav-action primary" data-i18n="exportDownload" hidden>下載 ZIP</a>
         </div>
         <p id="export-selection" class="count" role="status"></p>
-        <p class="count" data-i18n="exportSavedOnly">ZIP 只包含已儲存的頁面。</p>
+        <p class="count" data-i18n="exportSavedOnly">ZIP 包含已儲存的漫畫頁。</p>
         <p id="export-status" role="status" hidden></p>
       </div>
       <div id="books"></div>
@@ -67,7 +67,7 @@
         <label for="limit" data-i18n="storageLimit">書庫容量上限（MiB）</label>
         <div class="field"><input type="number" id="limit" required min="1" step="1"><button class="primary" type="submit" data-i18n="saveLimit">儲存上限</button></div>
       </form>
-      <p class="hint" data-i18n="limitHint">收藏和一般快取共用容量。調低上限時，書庫會從最久沒讀、尚未收藏的一話開始，整話移除。</p>
+      <p class="hint" data-i18n="limitHint">收藏和一般快取共用容量。調低上限時，書庫會優先移除最久沒讀且未收藏的章節。</p>
       <section class="storage-retention" aria-labelledby="retention-title">
         <h2 id="retention-title" data-i18n="storageProtection">瀏覽器儲存保護</h2>
         <p class="hint" id="retention" role="status"></p>

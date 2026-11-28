@@ -1,3 +1,7 @@
+const CZBOOKS_SITE = '小說狂人';
+const czbooksNovelStorageKey = workId => PREFIX + 'novel.czbooks.' + workId;
+let disposeSourceNovel;
+
 function detectCzbooks(root, address) {
   if (address.hostname !== 'czbooks.net') return null;
   const route = /^\/n\/([a-z0-9]+)(?:\/([a-z0-9]+))?\/?$/i.exec(address.pathname);
@@ -49,22 +53,121 @@ function detectCzbooks(root, address) {
         chapters.set(id, {id, title: name, url: url.href});
       }
       if (!chapters.size || (chapterId && !chapters.has(chapterId))) throw new Error('找不到章節目錄');
+      const ordered = [...chapters.values()];
+      ordered.forEach((chapter, index) => { chapter.order = index + 1; });
       return {
-        chapters: [...chapters.values()],
+        chapters: ordered,
         workTitle,
-        siteName: '小說狂人',
+        siteName: CZBOOKS_SITE,
         initialChapter: chapterId,
-        storageKey: PREFIX + 'novel.czbooks.' + workId,
-        loadChapter: async (chapter, abortSignal) => chapterText(
-          chapter.id === chapterId ? root : await readPage(chapter.url, abortSignal)
-        ),
+        storageKey: czbooksNovelStorageKey(workId),
+        cacheFailure: t('novelCacheFailed'),
+        async loadChapter(chapter, abortSignal) {
+          const key = [CZBOOKS_SITE, workId, chapter.id];
+          if (chapter.id !== chapterId) {
+            const cached = await readNovelChapter(key).catch(() => null);
+            abortSignal.throwIfAborted();
+            if (cached) return cached;
+          }
+          const paragraphs = chapterText(chapter.id === chapterId ? root : await readPage(chapter.url, abortSignal));
+          abortSignal.throwIfAborted();
+          try {
+            await putNovelChapter({
+              site: CZBOOKS_SITE, workId, chapterId: chapter.id, workTitle,
+              chapterTitle: chapter.title, order: chapter.order
+            }, paragraphs);
+          } catch (error) {
+            chapter.cacheFailed = true;
+            console.warn('[KomaGlide]', error.message);
+            return paragraphs;
+          }
+          getShelfEvents().announce({kind: 'novel-saved'});
+          void rememberSite();
+          return paragraphs;
+        },
       };
     },
   };
 }
 
+function showNovelReader(source, request, onClose) {
+  const shell = new DOMParser().parseFromString(/* INSERT_NOVEL_DOCUMENT */, 'text/html');
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ios) {
+    const original = document.documentElement;
+    const scroll = [window.scrollX, window.scrollY];
+    const root = document.importNode(shell.documentElement, true);
+    original.replaceWith(root);
+    function dispose() {
+      if (request.signal.aborted) return;
+      request.abort();
+      root.replaceWith(original);
+      window.scrollTo(...scroll);
+    }
+    try {
+      mountNovelReader(document, window, {...source, nativeScroll: true, signal: request.signal,
+        close() { dispose(); onClose(); }});
+    } catch (error) {
+      dispose();
+      throw error;
+    }
+    return dispose;
+  }
+  const overlay = document.createElement('dialog');
+  overlay.setAttribute('aria-label', 'KomaGlide 小說閱讀器');
+  overlay.style.cssText = 'position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;border:0;padding:0;background:#fbfaf5;overflow:hidden';
+  const frame = document.createElement('iframe');
+  frame.title = 'KomaGlide 小說閱讀器';
+  frame.style.cssText = 'display:block;width:100%;height:100%;border:0';
+  overlay.append(frame);
+  document.body.append(overlay);
+  const restoreViewport = fitReaderViewport();
+  function dispose() {
+    if (request.signal.aborted) return;
+    request.abort();
+    overlay.remove();
+    void restoreViewport?.();
+  }
+  function close() {
+    if (request.signal.aborted) return;
+    dispose();
+    onClose();
+  }
+  overlay.addEventListener('close', close, {once:true});
+  try {
+    overlay.showModal();
+    const readerDocument = frame.contentDocument;
+    readerDocument.documentElement.replaceWith(readerDocument.importNode(shell.documentElement, true));
+    mountNovelReader(readerDocument, frame.contentWindow, {...source, close, signal:request.signal});
+    frame.contentWindow.focus();
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+  return dispose;
+}
+
+function openShelfNovel(chapter, related, close) {
+  const [site, workId, initialChapter] = chapter.key;
+  return showNovelReader({
+    chapters: related.map(item => ({id: item.key[2], title: item.chapterTitle, order: item.order})),
+    workTitle: chapter.workTitle,
+    siteName: site,
+    initialChapter,
+    storageKey: czbooksNovelStorageKey(workId),
+    offline: true,
+    closeLabel: t('backToLibrary'),
+    async loadChapter(item) {
+      const paragraphs = await readNovelChapter([site, workId, item.id]);
+      if (!paragraphs) throw new Error(t('chapterRemoved'));
+      return paragraphs;
+    },
+  }, new AbortController(), close);
+}
+
 function runCzbooksNovel() {
-  const book = detectCzbooks(document, new URL(location.href));
+  const book = detectCzbooks(document.documentElement, new URL(location.href));
   if (!book) return false;
   const launch = document.createElement('button');
   launch.type = 'button';
@@ -76,41 +179,20 @@ function runCzbooksNovel() {
     if (active) return;
     const request = new AbortController();
     active = request;
+    disposeSourceNovel = () => request.abort();
     launch.disabled = true;
     launch.textContent = '載入章節目錄…';
     try {
       const source = await book.open(request.signal);
-      const overlay = document.createElement('dialog');
-      overlay.setAttribute('aria-label', 'KomaGlide 小說閱讀器');
-      overlay.style.cssText = 'position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;border:0;padding:0;background:#fbfaf5;overflow:hidden';
-      const frame = document.createElement('iframe');
-      frame.title = 'KomaGlide 小說閱讀器';
-      frame.style.cssText = 'display:block;width:100%;height:100%;border:0';
-      overlay.append(frame);
-      document.body.append(overlay);
-      const restoreViewport = fitReaderViewport();
-      const close = () => {
-        if (request.signal.aborted) return;
-        request.abort();
-        overlay.remove();
-        void restoreViewport?.();
+      if (request.signal.aborted) return;
+      disposeSourceNovel = showNovelReader(source, request, () => {
+        disposeSourceNovel = undefined;
         active = null;
         launch.disabled = false;
         launch.focus({preventScroll:true});
-      };
-      overlay.addEventListener('close', close, {once:true});
-      try {
-        overlay.showModal();
-        const shell = new DOMParser().parseFromString(/* INSERT_NOVEL_DOCUMENT */, 'text/html');
-        const readerDocument = frame.contentDocument;
-        readerDocument.documentElement.replaceWith(readerDocument.importNode(shell.documentElement, true));
-        mountNovelReader(readerDocument, frame.contentWindow, {...source, close, signal:request.signal});
-        frame.contentWindow.focus();
-      } catch (error) {
-        close();
-        throw error;
-      }
+      });
     } catch (error) {
+      disposeSourceNovel = undefined;
       active = null;
       launch.disabled = false;
       console.warn('[KomaGlide]', error.message);

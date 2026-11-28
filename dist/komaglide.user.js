@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.33
+// @version      0.7.35
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  閱讀漫畫與小說、保存漫畫圖片，並從腳本選單開啟本站書庫。
@@ -83,7 +83,7 @@ const translations = {
   exportPrepare: ['準備 ZIP', 'Prepare ZIP', 'ZIP を作成', '准备 ZIP'],
   exportDownload: ['下載 ZIP', 'Download ZIP', 'ZIP をダウンロード', '下载 ZIP'],
   exportSelected: ['已選 {count} 話，共 {pages} 頁', 'Selected chapters: {count} · Saved pages: {pages}', '{count} 話を選択・保存済み {pages} ページ', '已选 {count} 话，共 {pages} 页'],
-  exportSavedOnly: ['ZIP 只包含已儲存的頁面。', 'The ZIP includes only saved pages.', 'ZIP には保存済みのページのみが含まれます。', 'ZIP 仅包含已保存的页面。'],
+  exportSavedOnly: ['ZIP 包含已儲存的漫畫頁。', 'The ZIP contains saved comic pages.', 'ZIP には保存済みの漫画ページが含まれます。', 'ZIP 包含已保存的漫画页。'],
   exportReading: ['正在讀取已儲存的頁面…', 'Reading saved pages…', '保存済みのページを読み込み中…', '正在读取已保存的页面…'],
   exportPackaging: ['正在打包 {done}／{total} 頁…', 'Packing pages {done}/{total}…', 'ZIP を作成中（{done}/{total} ページ）…', '正在打包 {done}／{total} 页…'],
   exportReady: ['ZIP 已準備好。', 'The ZIP is ready.', 'ZIP をダウンロードできます。', 'ZIP 已准备好。'],
@@ -93,7 +93,7 @@ const translations = {
   backToLibrary: ['返回書庫', 'Back to Library', '本棚に戻る', '返回书库'],
   storageLimit: ['書庫容量上限（MiB）', 'Library storage limit (MiB)', '本棚の容量上限（MiB）', '书库容量上限（MiB）'],
   saveLimit: ['儲存上限', 'Save Limit', '上限を保存', '保存上限'],
-  limitHint: ['收藏和一般快取共用容量。調低上限時，書庫會從最久沒讀、尚未收藏的一話開始，整話移除。', 'Favorites and cached pages share this storage. Lowering the limit removes whole chapters, starting with the least recently read chapter that isn’t a favorite.', 'お気に入りとキャッシュは容量を共有します。上限を下げると、お気に入りに入っていない話のうち、最後に読んだ時期が古いものから話単位で削除されます。', '收藏和普通缓存共用容量。调低上限时，书库会从最久未读、尚未收藏的一话开始，整话移除。'],
+  limitHint: ['收藏和一般快取共用容量。調低上限時，書庫會優先移除最久沒讀且未收藏的章節。', 'Favorites and the reading cache share this storage. Lowering the limit removes the least recently read, unfavorited chapters first.', 'お気に入りとキャッシュは容量を共有します。上限を下げると、最後に読んだ時期が古い未登録の章から削除されます。', '收藏和普通缓存共用容量。调低上限时，书库会优先移除最久未读且未收藏的章节。'],
   storageProtection: ['瀏覽器儲存保護', 'Browser Storage Protection', 'ブラウザーのストレージ保護', '浏览器存储保护'],
   storageProtectionHint: ['空間不足時，瀏覽器可能清除未受保護的網站資料。', 'The browser may clear unprotected site data when storage runs low.', '空き容量が少なくなると、ブラウザーが保護されていないサイトデータを削除する場合があります。', '空间不足时，浏览器可能清除未受保护的网站数据。'],
   requestPersistence: ['申請持久儲存', 'Request Persistent Storage', '永続ストレージをリクエスト', '申请持久存储'],
@@ -172,11 +172,16 @@ const translations = {
   checkingPersistence: ['正在查詢本站的持久儲存狀態。', 'Checking persistent storage for this site…', 'このサイトの永続ストレージの状態を確認中…', '正在查询本站的持久存储状态。'],
   requestingPersistence: ['正在向瀏覽器申請持久儲存。', 'Requesting persistent storage…', '永続ストレージをリクエスト中…', '正在向浏览器申请持久存储。'],
   savedKnownTotal: ['已存 {count} / {total} 頁', 'Pages saved: {count}/{total}', '保存済み {count}／{total} ページ', '已存 {count} / {total} 页'],
+  novelSaved: ['可離線讀', 'Available offline', 'オフラインで読めます', '可离线读'],
+  novelCacheFailed: ['未能儲存供離線閱讀', 'Could not save for offline reading', 'オフライン用に保存できませんでした', '未能保存供离线阅读'],
+  novelChapterCount: ['已存 {count} 章', 'Chapters saved: {count}', '保存済み {count} 章', '已存 {count} 章'],
   savedUnknownTotal: ['已存 {count} 頁 · 總頁數未知', 'Pages saved: {count} · Total unknown', '保存済み {count} ページ · 総ページ数不明', '已存 {count} 页 · 总页数未知'],
   favoriteWork: ['收藏作品', 'Favorite Work', '作品をお気に入りに追加', '收藏作品'],
   favoritedWork: ['已收藏作品', 'Work Favorited', '作品はお気に入りに登録済み', '已收藏作品'],
   favoriteChapter: ['收藏單話', 'Favorite Chapter', 'この話をお気に入りに追加', '收藏单话'],
   favoritedChapter: ['已收藏單話', 'Chapter Favorited', 'この話はお気に入りに登録済み', '已收藏单话'],
+  favoriteNovelChapter: ['收藏本章', 'Favorite Chapter', 'この章をお気に入りに追加', '收藏本章'],
+  favoritedNovelChapter: ['已收藏本章', 'Chapter Favorited', 'この章はお気に入りに登録済み', '已收藏本章'],
   removedFavorite: ['已取消收藏。', 'Removed from favorites.', 'お気に入りから削除しました。', '已取消收藏。'],
   addedFavorite: ['已收藏。', 'Added to favorites.', 'お気に入りに追加しました。', '已收藏。'],
   storageDiagnostics: ['查看儲存診斷', 'View Storage Diagnostics', 'ストレージの詳細を見る', '查看存储诊断'],
@@ -185,8 +190,9 @@ const translations = {
   chapterCountOne: ['{count} 話', '{count} chapter', '{count} 話', '{count} 话'],
   noFavorites: ['還沒有收藏', 'No Favorites Yet', 'お気に入りはまだありません', '还没有收藏'],
   noComics: ['書架上還沒有漫畫', 'Your Library Is Empty', '本棚に漫画がありません', '书架上还没有漫画'],
-  favoritesHint: ['在全部作品中收藏作品或單話，即可在這裡找到。', 'Favorite a work or chapter in All Works to find it here.', '「すべての作品」で作品や話をお気に入りに追加すると、ここに表示されます。', '在全部作品中收藏作品或单话，即可在这里找到。'],
-  emptyShelfHint: ['安裝 KomaGlide 腳本後，到支援的漫畫頁閱讀。已儲存的頁面會自動出現在這裡。', 'Install KomaGlide and read a chapter on a supported site. Saved pages will appear here.', 'KomaGlide をインストールして対応サイトで漫画を読むと、保存したページがここに表示されます。', '安装 KomaGlide 脚本后，到支持的漫画页阅读。已保存的页面会自动出现在这里。'],
+  emptyLibrary: ['書庫還沒有作品', 'Your Library Is Empty', '本棚に作品がありません', '书库还没有作品'],
+  favoritesHint: ['在全部作品中收藏作品或章節，即可在這裡找到。', 'Favorite a work or chapter in All Works to find it here.', '「すべての作品」で作品や章をお気に入りに追加すると、ここに表示されます。', '在全部作品中收藏作品或章节，即可在这里找到。'],
+  emptyShelfHint: ['在支援的網站使用 KomaGlide 閱讀，已儲存的漫畫頁和小說章節會出現在這裡。', 'Use KomaGlide to read on a supported site. Saved comic pages and novel chapters will appear here.', '対応サイトで KomaGlide を使って読むと、保存した漫画のページや小説の章がここに表示されます。', '在支持的网站使用 KomaGlide 阅读，已保存的漫画页和小说章节会出现在这里。'],
   pageRemoved: ['此頁已從書庫移除。', 'This page was removed from the library.', 'このページは本棚から削除されました。', '此页已从书库移除。'],
   decodeFailed: ['第 {page} 頁的圖片無法解碼。', 'The image for page {page} could not be decoded.', '{page} ページの画像を読み取れませんでした。', '第 {page} 页的图片无法解码。'],
   missingPages: ['第 {range} 頁尚未儲存', 'Not saved: {range}', '{range} ページは未保存です', '第 {range} 页尚未保存'],
@@ -403,6 +409,30 @@ async function putPage(page, blob) {
   useImageBytes = true;
 }
 
+async function putNovelChapter(novel, paragraphs) {
+  const key = [novel.site, novel.workId, novel.chapterId];
+  const bytes = new TextEncoder().encode(JSON.stringify(paragraphs)).byteLength;
+  return transaction(stores, 'readwrite', async tables => {
+    const [state, previous] = await Promise.all([
+      readState(tables.settings), request(tables.chapters.get(key))
+    ]);
+    if (bytes > state.limit) throw new Error(t('chapterTooLarge'));
+    const delta = bytes - (previous?.bytes || 0);
+    await makeRoom(tables, state, state.used + delta - state.limit, key);
+    const chapter = {
+      key, kind: 'novel', workKnown: true, favorite: previous?.favorite ?? false,
+      workTitle: novel.workTitle, chapterTitle: novel.chapterTitle, order: novel.order, bytes
+    };
+    // A novel chapter has one text record. The existing compound key range
+    // lets the same eviction transaction remove either text or image records.
+    tables.pages.put({ paragraphs }, [...key, 1]);
+    state.used += delta;
+    touch(state, chapter);
+    tables.chapters.put(chapter, key);
+    tables.settings.put(state, 'storage');
+  });
+}
+
 // Keep saved pages readable when the browser can no longer commit recency data.
 async function chapterRead(key, read) {
   async function run(tables) {
@@ -428,7 +458,8 @@ async function chapterRead(key, read) {
 async function lookupPage(page, includeBlob) {
   const key = identity(page);
   const pageKey = [...key, page.index];
-  const data = await chapterRead(key, pages => request(includeBlob ? pages.get(pageKey) : pages.getKey(pageKey)));
+  const data = await chapterRead(key, (pages, chapter) =>
+    chapter.kind === 'novel' ? null : request(includeBlob ? pages.get(pageKey) : pages.getKey(pageKey)));
   if (!includeBlob) return { exists: !!data };
   return { exists: !!data, blob: data ? storedImage(data) : null };
 }
@@ -441,7 +472,7 @@ async function readExportChapters(keys, validate, signal) {
   return transaction(['chapters', 'pages'], 'readonly', async tables => {
     const chapters = await Promise.all(keys.map(key => request(tables.chapters.get(key))));
     signal.throwIfAborted();
-    if (chapters.some(chapter => !chapter?.count)) throw new Error(t('exportChapterMissing'));
+    if (chapters.some(chapter => !chapter?.count || chapter.kind === 'novel')) throw new Error(t('exportChapterMissing'));
     validate(chapters);
     const result = [];
     for (const chapter of chapters) {
@@ -501,8 +532,16 @@ async function setChapterSubtitle(key, subtitle) {
 
 async function readChapter(key) {
   return chapterRead(key, async (pages, chapter) => {
+    if (chapter.kind === 'novel') return { chapter };
     const keys = await request(pages.getAllKeys(indices(key)));
     return { chapter, indices: keys.map(pageKey => pageKey[3]) };
+  });
+}
+
+async function readNovelChapter(key) {
+  return chapterRead(key, async (pages, chapter) => {
+    if (chapter.kind !== 'novel') return null;
+    return (await request(pages.get([...key, 1])))?.paragraphs ?? null;
   });
 }
 
@@ -708,7 +747,7 @@ async function makeComicZip(chapters, { signal, progress }) {
 }
 
   
-function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }) {
+function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, openNovel }) {
   localizeDocument();
   const $ = id => document.getElementById(id);
   const languagePicker = $('library-language');
@@ -736,6 +775,8 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
   let version = 0;
   let refreshTimer;
   let disposePages = () => {};
+  let disposeNovel;
+  let shelfHash = routePrefix + 'shelf';
   let pageAtViewport = () => 1;
   let activeKey;
   let retentionCheck = 0;
@@ -901,12 +942,14 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
   }
 
   function countText(chapter) {
+    if (chapter.kind === 'novel') return t('novelSaved');
     return t(chapter.total ? 'savedKnownTotal' : 'savedUnknownTotal', {count: chapter.count, total: chapter.total});
   }
 
-  function favoriteButton(key, enabled) {
+  function favoriteButton(key, enabled, novel = false) {
     const label = key.length === 3
-      ? t(enabled ? 'favoritedChapter' : 'favoriteChapter')
+      ? t(novel ? (enabled ? 'favoritedNovelChapter' : 'favoriteNovelChapter') :
+        (enabled ? 'favoritedChapter' : 'favoriteChapter'))
       : t(enabled ? 'favoritedWork' : 'favoriteWork');
     const button = el('button', label, 'favorite');
     button.type = 'button';
@@ -1053,6 +1096,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
     const protectedWorks = new Set(data.favorites.map(key => JSON.stringify(key)));
     const groups = new Map();
     for (const chapter of data.chapters) {
+      if (exporting && chapter.kind === 'novel') continue;
       const workKey = chapter.key.slice(0, 2);
       const workStar = chapter.workKnown && protectedWorks.has(JSON.stringify(workKey));
       if (starred && !workStar && !chapter.favorite) continue;
@@ -1070,14 +1114,16 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
       const head = el('div', null, 'work-head');
       const names = el('div');
       const count = group.chapters.length;
+      const novel = recent.kind === 'novel';
+      const saved = novel ? t('novelChapterCount', {count}) : t(count === 1 ? 'chapterCountOne' : 'chapterCount', {count});
       names.append(el('h2', recent.workKnown ? recent.workTitle : t('ungrouped')),
-        el('span', recent.key[0] + ' · ' + t(count === 1 ? 'chapterCountOne' : 'chapterCount', {count}), 'source'));
+        el('span', recent.key[0] + ' · ' + saved, 'source'));
       head.append(names);
       if (!exporting && recent.workKnown) head.append(favoriteButton(workKey, workStar));
       article.append(head);
       for (const chapter of group.chapters.sort(chaptersInOrder)) {
         const row = el('div', null, 'chapter-row');
-        const action = exporting ? el('input') : favoriteButton(chapter.key, chapter.favorite);
+        const action = exporting ? el('input') : favoriteButton(chapter.key, chapter.favorite, novel);
         if (exporting) {
           action.type = 'checkbox';
           action.id = 'kg-export-' + chapter.key.map(encodeURIComponent).join('/');
@@ -1092,9 +1138,8 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
     }
     if (!groups.size) {
       const empty = el('div', null, 'empty');
-      empty.append(el('h2', starred ? t('noFavorites') : t('noComics')),
-        el('p', starred ? t('favoritesHint') :
-          t('emptyShelfHint')));
+      empty.append(el('h2', starred ? t('noFavorites') : t(exporting ? 'noComics' : 'emptyLibrary')));
+      if (!exporting) empty.append(el('p', t(starred ? 'favoritesHint' : 'emptyShelfHint')));
       frag.append(empty);
     }
     const books = $('books');
@@ -1280,6 +1325,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
   }
 
   async function render(reset = false) {
+    if (disposeNovel && !reset) return;
     const token = ++version;
     const hash = location.hash.slice(routePrefix.length);
     const reading = hash.startsWith('read/');
@@ -1287,8 +1333,10 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
     const starred = hash === 'favorites';
     const exporting = hash === 'export';
     if (reset) {
+      disposeNovel?.();
       notify();
       disposePages();
+      disposeNovel = undefined;
       if (exporting !== !$('export-tools').hidden) $('books').replaceChildren();
       clearPreparedZip();
       selectedChapters.clear();
@@ -1316,6 +1364,16 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
         const { chapter, indices } = result;
         const data = await shelf();
         if (version !== token) return;
+        if (chapter.kind === 'novel' && openNovel) {
+          const related = data.chapters.filter(item => item.kind === 'novel' &&
+            item.key[0] === key[0] && item.key[1] === key[1]).sort(chaptersInOrder);
+          if (!related.some(item => item.key[2] === key[2])) throw new Error(t('chapterRemoved'));
+          $('reader').hidden = true;
+          disposeNovel = openNovel(chapter, related, () => { location.hash = shelfHash; });
+          document.title = chapter.chapterTitle + ' · KomaGlide';
+          return;
+        }
+        if (!indices) throw new Error(t('chapterNotFound'));
         const current = reset ? 1 : pageAtViewport();
         disposePages();
         activeKey = key;
@@ -1338,6 +1396,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
         if (reset) $('limit').value = String(limit / MiB);
         if (reset) void checkStorageProtection();
       } else {
+        if (!exporting) shelfHash = location.hash || routePrefix + 'shelf';
         $('usage').textContent = size(used) + ' / ' + size(limit);
         for (const [id, active] of [['all-tab', !starred && !exporting], ['star-tab', starred], ['export-tab', exporting]]) {
           if (active) $(id).setAttribute('aria-current', 'page');
@@ -1375,6 +1434,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
   };
 
   changes.addEventListener('change', ({ detail }) => {
+    if (disposeNovel) return;
     if (detail.kind === 'error') {
       notify(detail.message);
       return;
@@ -1399,7 +1459,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
 }
 
 
-  // Remember the page that can host each site's shelf. Comic bytes stay in that site's IndexedDB.
+  // Remember the page that can host each site's shelf. Cached content stays in that site's IndexedDB.
   let rememberedSite = false;
   async function rememberSite() {
     if (rememberedSite) return;
@@ -1416,6 +1476,15 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
   }
 
   async function openShelf() {
+    if (location.hostname === 'czbooks.net' && !navigator.onLine) {
+      if (location.hash.startsWith(SHELF_HASH)) {
+        location.hash = SHELF_HASH + 'shelf';
+      } else {
+        history.replaceState(history.state, '', SHELF_HASH + 'shelf');
+        displayShelf();
+      }
+      return;
+    }
     const siteEntry = origin => read(PREFIX + 'shelf-entry.' + origin);
     const current = webUrl(await siteEntry(location.origin));
     let entry = current?.origin === location.origin ? current : null;
@@ -1429,10 +1498,12 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
   }
 
   function displayShelf() {
-    // This explicitly opened tab uses the comic site's storage origin. Its UI is bundled.
+    // The shelf uses the source site's storage origin. Its UI is bundled.
+    disposeSourceNovel?.();
+    disposeSourceNovel = undefined;
     // The chapter document has finished parsing. Drop its event handlers and
     // install the bundled DOM before mounting controls or observing page slots.
-    const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#f7f6f2\">\n  <meta name=\"referrer\" content=\"no-referrer\">\n  <link rel=\"icon\" href=\"data:,\">\n  <title>本站書庫 · KomaGlide</title>\n<style>:root {\n  color-scheme: light;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n  line-height: 1.6;\n  color: var(--ink);\n  background: var(--paper);\n  --ink: #222520;\n  --muted: #586158;\n  --line: #d4d7cd;\n  --accent: #305c46;\n  --paper: #f7f6f2;\n  --panel: #e9ede2;\n  --slot: #edeee7;\n  --field: #fff;\n  --field-border: #9ca79b;\n  --hover: #e3e9df;\n  --active: #d3ded0;\n  --favorite-ink: #23492d;\n  --favorite-fill: #e3ecd7;\n  --favorite-border: #72866a;\n  --on-accent: #fff;\n  --accent-hover: #244432;\n}\n:root[data-reader-theme=\"dark\"] {\n  color-scheme: dark;\n  --ink: #e8ebe5;\n  --muted: #b2baaf;\n  --line: #434c43;\n  --accent: #b3dbbc;\n  --paper: #161a17;\n  --panel: #202721;\n  --slot: #202520;\n  --field: #29302a;\n  --field-border: #798779;\n  --hover: #344238;\n  --active: #415146;\n  --favorite-ink: #c3dfbe;\n  --favorite-fill: #2d3d30;\n  --favorite-border: #798e78;\n  --on-accent: #192d20;\n  --accent-hover: #c5e5cd;\n}\n:root[data-reader-theme=\"dark\"] :focus-visible {\n  outline-color: #a4c790;\n}\n:root[data-reader-theme=\"dark\"] ::selection {\n  background: #416049;\n  color: #f2f5f0;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; }\n[hidden] { display: none !important; }\nbutton, input { font: inherit; }\na { color: inherit; text-underline-offset: .24em; }\na:hover { color: var(--accent); }\nbutton { cursor: pointer; }\nbutton:disabled { opacity: .55; cursor: wait; }\n:focus-visible { outline: 3px solid #6a8552; outline-offset: 3px; }\n::selection { background: #d6e5c4; }\n.masthead { border-bottom: 1px solid var(--line); }\n.topline, main { width: min(100% - 3rem, 64rem); margin-inline: auto; }\n.topline { min-height: 3.35rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }\n.masthead-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .25rem .75rem; padding-block: .5rem; }\n.brand { font-family: \"DM Sans\", sans-serif; font-size: 1.2rem; font-weight: 750; letter-spacing: -.035em; text-decoration: none; }\n#offline-state, .source, .count, #usage, .hint, figcaption, .back { color: var(--muted); font-size: .88rem; }\n#offline-state { font-size: .75rem; overflow-wrap: anywhere; }\nmain { padding-block: 3rem 5rem; }\nh1, h2, p, figure { margin: 0; }\nh1, h2 { overflow-wrap: anywhere; line-height: 1.35; }\nh1 { font-size: 2.5rem; letter-spacing: -.025em; }\nh2 { font-size: 1.26rem; }\n.title-row, .work-head, .shelf-tools { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }\n.title-row { margin-bottom: 1.1rem; }\n.title-row h1 { min-width: 0; font-size: clamp(1.8125rem, 3vw, 2.25rem); letter-spacing: .015em; }\n.nav-action, button { border: 1px solid var(--field-border); border-radius: .35rem; background: transparent; padding: .38rem .75rem; color: var(--ink); text-decoration: none; white-space: nowrap; }\n.nav-action { color: var(--muted); font-size: .8125rem; padding: .32rem .56rem; border-color: var(--line); }\n.nav-action:hover, button:enabled:hover { background: var(--hover); }\n.nav-action:active, button:enabled:active { background: var(--active); }\n.shelf-tools { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: .25rem 1rem; }\n.shelf-tools nav { display: flex; flex-wrap: wrap; column-gap: 1.3rem; }\n.shelf-tools a { display: flex; align-items: center; min-height: 44px; padding-bottom: .375rem; font-size: .875rem; color: var(--muted); text-decoration: none; }\n.shelf-tools a[aria-current] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); font-weight: 700; }\n#usage, .count, figcaption { font-variant-numeric: tabular-nums; }\n#usage, .work .source, .chapter-row .count { font-size: .75rem; }\n.work { padding-top: clamp(1.5rem, 3vw, 2rem); }\n.work-head { margin-bottom: .875rem; }\n.work-head > div { min-width: 0; }\n.work-head h2 {\n  font: 700 clamp(1.9375rem, 3vw, 2.375rem)/1.35 \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  letter-spacing: .025em;\n}\n.source { overflow-wrap: anywhere; }\n.chapter-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto 44px;\n  align-items: center;\n  column-gap: 1rem;\n  border-top: 1px solid var(--line);\n  padding-block: .75rem;\n}\n.chapter-row:last-child { border-bottom: 1px solid var(--line); }\n.chapter-link { font-weight: 570; overflow-wrap: anywhere; }\n.chapter-row .chapter-link { display: block; min-width: 0; font-size: 1.125rem; line-height: 1.48; font-weight: 650; letter-spacing: .015em; text-decoration: none; }\n.chapter-row .chapter-link:is(:hover, :focus-visible) { color: var(--accent); text-decoration: underline; }\n.chapter-heading { display: flex; align-items: baseline; gap: .625rem; }\n.chapter-heading > span { min-width: 0; }\n.chapter-ordinal { flex: none; max-width: 42%; font-size: .8125rem; font-weight: 500; letter-spacing: normal; color: var(--muted); }\n.chapter-separator { font-size: 0; }\n.chapter-subtitle { display: block; color: var(--muted); font-size: .88rem; font-weight: normal; overflow-wrap: anywhere; }\n.favorite { color: var(--muted); font-size: .75rem; padding: .32rem .56rem; border-color: var(--line); }\n.favorite[aria-pressed=\"true\"] { color: var(--favorite-ink); border-color: var(--favorite-border); background: var(--favorite-fill); }\n.chapter-row .favorite { display: grid; place-items: center; justify-self: end; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }\n.chapter-row .favorite[aria-pressed=\"true\"] { color: var(--accent); }\n.chapter-row .favorite:hover { background: var(--hover); }\n.chapter-row .favorite:active { background: var(--active); }\n.favorite[aria-disabled=\"true\"] { opacity: .55; cursor: wait; }\n.chapter-row .favorite svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; fill: none; }\n.chapter-row .favorite[aria-pressed=\"true\"] svg { fill: currentColor; }\n#export-tools { position: sticky; top: 0; z-index: 1; display: grid; gap: .25rem; padding-block: .75rem; background: var(--paper); border-bottom: 1px solid var(--line); }\n.export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }\n.export-actions > :is(button, a) { display: inline-flex; align-items: center; min-height: 44px; font-size: .875rem; }\n#export-tools button:disabled { cursor: default; }\n#export-status { margin-top: .25rem; font-size: .875rem; overflow-wrap: anywhere; }\n#export-status[data-error] { font-weight: 650; }\n.export-check { display: grid; place-items: center; width: 44px; height: 44px; cursor: pointer; }\n.export-check input { margin: 0; width: 1.125rem; height: 1.125rem; accent-color: var(--accent); scroll-margin-top: 10rem; }\n.chapter-row label.chapter-link { cursor: pointer; }\n.empty { padding: 4.5rem 0; }\n.empty p, .hint { margin-top: .7rem; color: var(--muted); max-width: 39rem; }\n#notice { margin-bottom: 1.25rem; padding: .7rem 1rem; background: var(--notice-surface, #f2e9cf); color: var(--notice-ink, #574722); border-radius: .3rem; overflow-wrap: anywhere; }\n#notice[data-tone=\"success\"] { background: var(--favorite-fill); color: var(--favorite-ink); font-weight: 650; }\n.notice-detail { display: block; margin-top: .25rem; font-weight: 400; }\n.notice-detail:empty { display: none; }\n.notice-detail a { display: inline-block; }\n.storage-retention { margin-top: 1.75rem; overflow-wrap: anywhere; }\n#request-retention { margin-top: .75rem; min-height: 44px; }\n.back { display: inline-block; margin-bottom: 1.25rem; }\n#storage h1 { margin-bottom: 1rem; }\nform { margin: 1.75rem 0 0; }\nlabel { display: block; font-weight: 650; }\n.field { display: flex; gap: .65rem; margin-top: .5rem; }\ninput { min-width: 0; width: 9rem; padding: .4rem .6rem; border: 1px solid var(--field-border); border-radius: .35rem; background: var(--field); color: var(--ink); }\n.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }\n.primary:is(a, :enabled):is(:hover, :active) { color: var(--on-accent); background: var(--accent-hover); }\n#reader { max-width: 48rem; margin-inline: auto; }\n#chapter-head p { margin-top: .35rem; }\n.reading-chapter #chapter-head h1 { font-size: 1.12rem; }\n.reading-chapter #chapter-head p { color: var(--muted); font-size: .85rem; }\n.reading-chapter #reader-return { margin: 0; }\n#reader-end { display: grid; gap: .6rem; }\n#reader-end:empty { display: none; }\n#reader-tools { height: 0; }\n.reading-chapter .masthead { display: none; }\n.reading-chapter main { width: 100%; padding: 0; }\n.reading-chapter #notice {\n  position: fixed;\n  z-index: 1;\n  inset: auto 0 .75rem;\n  margin: auto;\n  width: max-content;\n  max-width: calc(100% - 2rem);\n  max-height: 35dvh;\n  overflow: auto;\n}\n#pages figcaption {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip-path: inset(50%);\n  white-space: nowrap;\n}\n#reader[data-mode=\"scroll\"] #pages > * + * { margin-top: .25rem; }\n.page-slot { background: var(--slot); aspect-ratio: 2 / 3; width: 100%; }\n.page-slot img { display: block; width: 100%; height: auto; }\n.gap { padding: 1rem; text-align: center; background: var(--slot); color: var(--muted); }\n.theme-picker, .kg-reader-controls label {\n  display: flex;\n  align-items: center;\n  gap: .5rem;\n  font-size: .85rem;\n  font-weight: 500;\n  color: var(--muted);\n}\n.kg-reader-controls select, .theme-picker select {\n  border: 1px solid var(--field-border);\n  border-radius: .35rem;\n  color: var(--ink);\n  background: var(--field);\n  font: inherit;\n  font-size: .88rem;\n  padding: .3rem .55rem;\n  min-height: 2.1rem;\n}\n.kg-reader-controls select:hover, .theme-picker select:hover { background: var(--hover); }\n.theme-picker { flex: none; gap: .3125rem; font-size: .75rem; }\n.theme-picker select { min-height: 1.875rem; padding: .125rem .25rem; font-size: .75rem; border-color: var(--line); background: transparent; }\n.kg-reader-controls button:disabled { cursor: default; }\n.paged-reader #reader { max-width: none; }\n.paged-reader #pages {\n  display: flex;\n  justify-content: center;\n  width: 100%;\n  height: 100dvh;\n  gap: 2px;\n}\n.paged-reader #pages > * {\n  flex: 1 1 0;\n  min-width: 0;\n  direction: ltr;\n}\n.paged-reader .page-slot {\n  height: 100%;\n  background: transparent;\n}\n.paged-reader .page-slot img {\n  height: 100%;\n  object-fit: contain;\n}\n#pages[dir=\"rtl\"] { --first-spine: left; --second-spine: right; }\n#pages[dir=\"ltr\"] { --first-spine: right; --second-spine: left; }\n#reader[data-mode=\"double\"] figure:first-child:not(:only-child) img { object-position: var(--first-spine) center; }\n#reader[data-mode=\"double\"] figure:nth-child(2) img { object-position: var(--second-spine) center; }\n.paged-reader #pages > .gap { display: grid; place-items: center; }\n:root[data-reader-theme=\"dark\"] #notice { --notice-surface: #423b28; --notice-ink: #f0e2bc; }\n@media (max-width: 38rem) {\n  .topline, main { width: calc(100% - 2.5rem); }\n  main { padding-top: 1.6875rem; }\n  h1 { font-size: 1.95rem; }\n  .chapter-row { grid-template-columns: minmax(0, 1fr) 44px; column-gap: .375rem; padding-block: .8125rem .75rem; }\n  .chapter-row .count { grid-column: 1; margin-top: .125rem; }\n  .chapter-row :is(.favorite, .export-check) { grid-column: 2; grid-row: 1 / 3; }\n}\n@media (max-width: 22rem) {\n  .work-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .375rem .5rem; }\n  .work-head > div { display: contents; }\n  .work-head h2, .work-head > :only-child .source { grid-column: 1 / -1; }\n  .work-head .favorite { grid-column: 2; }\n}\n\n.kg-page-gestures { touch-action: pan-y pinch-zoom; }\n\n.kg-reader-controls input[type=\"checkbox\"] {\n  width: 1rem;\n  height: 1rem;\n  margin: 0;\n  padding: 0;\n  accent-color: var(--accent);\n}\n.kg-page-turns[data-direction=\"rtl\"] { flex-direction: row-reverse; }\n\ndialog.kg-thumb-picker {\n  position: fixed;\n  inset: 0;\n  margin: auto;\n  box-sizing: border-box;\n  width: 94vw;\n  height: 92dvh;\n  max-width: 100%;\n  max-height: 100dvh;\n  padding: 0;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--paper);\n  color: var(--ink);\n  font: inherit;\n  text-align: start;\n}\ndialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }\n.kg-thumb-picker::backdrop { background: rgb(9 14 10 / 68%); }\n.kg-thumb-head, .kg-thumb-footer {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: .75rem;\n  padding: .75rem 1rem;\n}\n.kg-thumb-head { flex-wrap: wrap; border-bottom: 1px solid var(--line); }\n.kg-thumb-head strong { font-size: 1.1rem; margin: 0; }\n.kg-thumb-range {\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n}\n.kg-thumb-head .kg-thumb-size {\n  display: inline-flex;\n  align-items: center;\n  gap: .4rem;\n  margin-inline-start: auto;\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  white-space: nowrap;\n}\n.kg-thumb-size select { min-height: 2.1rem; }\n.kg-thumb-footer { justify-content: space-between; border-top: 1px solid var(--line); }\n.kg-thumb-grid {\n  --tile-min: 6rem;\n  display: grid;\n  flex: 1 1 0;\n  min-height: 0;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile-min)), 1fr));\n  grid-auto-rows: max-content;\n  align-content: start;\n  gap: .75rem;\n  padding: 1rem;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scroll-padding: 1rem;\n}\n.kg-thumb-grid[data-size=\"small\"] { --tile-min: 4rem; }\n.kg-thumb-grid[data-size=\"large\"] { --tile-min: clamp(15rem, 24vw, 26rem); }\n.kg-thumb-grid .kg-thumb-page {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: .22rem;\n  min-width: 0;\n  padding: .25rem;\n  border: 1px solid transparent;\n  border-radius: .35rem;\n  background: transparent;\n  color: var(--ink);\n  font: inherit;\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n  white-space: normal;\n  cursor: pointer;\n}\n.kg-thumb-grid .kg-thumb-page:hover { background: var(--hover); }\n.kg-thumb-grid .kg-thumb-page[aria-current=\"page\"] {\n  border-color: var(--accent);\n  color: var(--accent);\n  font-weight: 700;\n}\n.kg-thumb-frame {\n  display: grid;\n  place-items: center;\n  width: 100%;\n  flex: none;\n  aspect-ratio: 3 / 4;\n  overflow: hidden;\n  background: var(--slot, var(--well));\n  color: var(--muted, var(--ink));\n  font-size: .8rem;\n}\n.kg-thumb-frame img {\n  display: block;\n  width: 100%;\n  height: 100%;\n  min-height: 0;\n  object-fit: contain;\n}\n@media (max-width: 38rem) {\n  dialog.kg-thumb-picker { width: calc(100vw - .5rem); height: calc(100dvh - 1rem); }\n  .kg-thumb-head { gap: .4rem .6rem; padding: .6rem; }\n  .kg-thumb-grid { --tile-min: 4.8rem; gap: .5rem; padding: .65rem; }\n  .kg-thumb-grid[data-size=\"small\"] { --tile-min: 3.3rem; }\n  .kg-thumb-grid[data-size=\"large\"] { --tile-min: 12rem; }\n}\n.kg-reader-controls {\n  --edge-width: 2.5rem;\n  --edge-surface: var(--paper);\n  display: contents;\n}\n.kg-reader-controls[hidden] { display: none; }\n.kg-edge, .kg-edge-panel {\n  display: flex;\n  align-items: center;\n}\n.kg-edge {\n  position: fixed;\n  top: 50%;\n  transform: translateY(-50%);\n  z-index: 8;\n  pointer-events: none;\n}\n.kg-edge-left { left: env(safe-area-inset-left, 0px); }\n.kg-edge-right { right: env(safe-area-inset-right, 0px); flex-direction: row-reverse; }\n.kg-reader-controls .kg-edge-toggle {\n  position: relative;\n  padding: .7rem .35rem;\n  width: var(--edge-width);\n  min-height: 3.8rem;\n  display: grid;\n  place-items: center;\n  border: 1px solid var(--line);\n  background: color-mix(in srgb, var(--edge-surface) 91%, transparent);\n  color: var(--ink);\n  font: inherit;\n  font-size: .8rem;\n  font-weight: 600;\n  letter-spacing: .1em;\n  line-height: 1;\n  writing-mode: vertical-rl;\n  text-orientation: upright;\n  pointer-events: auto;\n  cursor: pointer;\n}\n.kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }\n.kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }\n.kg-edge-toggle:lang(en) { text-orientation: mixed; }\n.kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded=\"true\"]) {\n  background: var(--hover);\n  color: var(--accent);\n}\n.kg-edge .kg-edge-panel {\n  position: absolute;\n  width: 15rem;\n  max-width: calc(100vw - 2 * var(--edge-width) - 1.25rem);\n  max-height: calc(100dvh - 2rem);\n  flex-direction: column;\n  align-items: stretch;\n  gap: .65rem;\n  margin: 0;\n  padding: 1rem;\n  overflow: auto;\n  overscroll-behavior: contain;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--edge-surface);\n  color: var(--ink);\n  box-shadow: 0 .3rem 1.2rem rgb(0 0 0 / 18%);\n  font-size: .9rem;\n  line-height: 1.45;\n  pointer-events: auto;\n}\n.kg-edge-panel[hidden] { display: none; }\n.kg-edge-left .kg-edge-panel { left: calc(100% + .35rem); }\n.kg-edge-right .kg-edge-panel { right: calc(100% + .35rem); }\n.kg-edge-panel h2 {\n  margin: 0 0 .2rem;\n  color: var(--ink);\n  font: inherit;\n  font-size: 1.05rem;\n  font-weight: 700;\n}\n.kg-edge-panel > label {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: .6rem;\n  font-size: .875rem;\n}\n.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }\n.kg-edge-panel > label:has(input) { justify-content: start; }\n.kg-edge-extras {\n  display: grid;\n  gap: .6rem;\n  min-width: 0;\n  padding-top: .75rem;\n  border-top: 1px solid var(--line);\n}\n.kg-edge-extras:not(:has(> :not([hidden]))) { display: none; }\n.kg-page-turns {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .25rem;\n}\n.kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }\n.kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }\n.kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }\n</style></head>\n<body>\n  <header class=\"masthead\">\n    <div class=\"topline\">\n      <a class=\"brand\" href=\"#shelf\" aria-label=\"KomaGlide 本站書庫首頁\" data-i18n-label=\"siteLibraryHome\">KomaGlide</a>\n      <div class=\"masthead-tools\">\n        <span id=\"offline-state\" role=\"status\" data-i18n=\"preparingLibrary\"></span>\n        <label class=\"theme-picker\" for=\"library-theme\"><span data-i18n=\"appearance\">外觀</span>\n          <select id=\"library-theme\">\n            <option value=\"system\" data-i18n=\"systemTheme\">跟隨系統</option>\n            <option value=\"light\" data-i18n=\"lightTheme\">淺色</option>\n            <option value=\"dark\" data-i18n=\"darkTheme\">深色</option>\n          </select>\n        </label>\n        <label class=\"theme-picker\" for=\"library-language\">\n          <span data-i18n=\"language\">語言</span>\n          <select id=\"library-language\"></select>\n        </label>\n      </div>\n    </div>\n  </header>\n  <main>\n    <p id=\"notice\" role=\"status\" hidden></p>\n    <section id=\"shelf\">\n      <div class=\"title-row\">\n        <h1 data-i18n=\"siteLibrary\">本站書庫</h1>\n        <a class=\"nav-action\" href=\"#storage\" data-i18n=\"storageSettings\">容量設定</a>\n      </div>\n      <div class=\"shelf-tools\">\n        <nav aria-label=\"書庫篩選\" data-i18n-label=\"libraryFilters\">\n          <a href=\"#shelf\" id=\"all-tab\" data-i18n=\"allWorks\">全部作品</a>\n          <a href=\"#favorites\" id=\"star-tab\" data-i18n=\"favorites\">收藏</a>\n          <a href=\"#export\" id=\"export-tab\" data-i18n=\"exportMode\">匯出模式</a>\n        </nav>\n        <span id=\"usage\"></span>\n      </div>\n      <div id=\"export-tools\" hidden>\n        <div class=\"export-actions\">\n          <button id=\"export-select-all\" type=\"button\" data-i18n=\"exportSelectAll\" disabled>全選</button>\n          <button id=\"export-prepare\" class=\"primary\" type=\"button\" data-i18n=\"exportPrepare\" disabled>準備 ZIP</button>\n          <a id=\"export-download\" class=\"nav-action primary\" data-i18n=\"exportDownload\" hidden>下載 ZIP</a>\n        </div>\n        <p id=\"export-selection\" class=\"count\" role=\"status\"></p>\n        <p class=\"count\" data-i18n=\"exportSavedOnly\">ZIP 只包含已儲存的頁面。</p>\n        <p id=\"export-status\" role=\"status\" hidden></p>\n      </div>\n      <div id=\"books\"></div>\n    </section>\n    <section id=\"storage\" hidden>\n      <a class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <h1 data-i18n=\"storageSettings\">容量設定</h1>\n      <p id=\"storage-summary\"></p>\n      <form id=\"limit-form\">\n        <label for=\"limit\" data-i18n=\"storageLimit\">書庫容量上限（MiB）</label>\n        <div class=\"field\"><input type=\"number\" id=\"limit\" required min=\"1\" step=\"1\"><button class=\"primary\" type=\"submit\" data-i18n=\"saveLimit\">儲存上限</button></div>\n      </form>\n      <p class=\"hint\" data-i18n=\"limitHint\">收藏和一般快取共用容量。調低上限時，書庫會從最久沒讀、尚未收藏的一話開始，整話移除。</p>\n      <section class=\"storage-retention\" aria-labelledby=\"retention-title\">\n        <h2 id=\"retention-title\" data-i18n=\"storageProtection\">瀏覽器儲存保護</h2>\n        <p class=\"hint\" id=\"retention\" role=\"status\"></p>\n        <p class=\"hint\" data-i18n=\"storageProtectionHint\">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>\n        <button id=\"request-retention\" type=\"button\" data-i18n=\"requestPersistence\">申請持久儲存</button>\n        <p class=\"hint\" id=\"retention-result\" role=\"status\"></p>\n      </section>\n    </section>\n    <section id=\"reader\" hidden>\n      <a id=\"reader-return\" class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <div id=\"chapter-head\"></div>\n      <div id=\"reader-tools\"></div>\n      <div id=\"pages\"></div>\n      <nav id=\"reader-end\" aria-label=\"話數導覽\" data-i18n-label=\"chapterNavigation\"></nav>\n    </section>\n    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>\n  </main>\n</body>\n</html>\n", 'text/html');
+    const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#f7f6f2\">\n  <meta name=\"referrer\" content=\"no-referrer\">\n  <link rel=\"icon\" href=\"data:,\">\n  <title>本站書庫 · KomaGlide</title>\n<style>:root {\n  color-scheme: light;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n  line-height: 1.6;\n  color: var(--ink);\n  background: var(--paper);\n  --ink: #222520;\n  --muted: #586158;\n  --line: #d4d7cd;\n  --accent: #305c46;\n  --paper: #f7f6f2;\n  --panel: #e9ede2;\n  --slot: #edeee7;\n  --field: #fff;\n  --field-border: #9ca79b;\n  --hover: #e3e9df;\n  --active: #d3ded0;\n  --favorite-ink: #23492d;\n  --favorite-fill: #e3ecd7;\n  --favorite-border: #72866a;\n  --on-accent: #fff;\n  --accent-hover: #244432;\n}\n:root[data-reader-theme=\"dark\"] {\n  color-scheme: dark;\n  --ink: #e8ebe5;\n  --muted: #b2baaf;\n  --line: #434c43;\n  --accent: #b3dbbc;\n  --paper: #161a17;\n  --panel: #202721;\n  --slot: #202520;\n  --field: #29302a;\n  --field-border: #798779;\n  --hover: #344238;\n  --active: #415146;\n  --favorite-ink: #c3dfbe;\n  --favorite-fill: #2d3d30;\n  --favorite-border: #798e78;\n  --on-accent: #192d20;\n  --accent-hover: #c5e5cd;\n}\n:root[data-reader-theme=\"dark\"] :focus-visible {\n  outline-color: #a4c790;\n}\n:root[data-reader-theme=\"dark\"] ::selection {\n  background: #416049;\n  color: #f2f5f0;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; }\n[hidden] { display: none !important; }\nbutton, input { font: inherit; }\na { color: inherit; text-underline-offset: .24em; }\na:hover { color: var(--accent); }\nbutton { cursor: pointer; }\nbutton:disabled { opacity: .55; cursor: wait; }\n:focus-visible { outline: 3px solid #6a8552; outline-offset: 3px; }\n::selection { background: #d6e5c4; }\n.masthead { border-bottom: 1px solid var(--line); }\n.topline, main { width: min(100% - 3rem, 64rem); margin-inline: auto; }\n.topline { min-height: 3.35rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }\n.masthead-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .25rem .75rem; padding-block: .5rem; }\n.brand { font-family: \"DM Sans\", sans-serif; font-size: 1.2rem; font-weight: 750; letter-spacing: -.035em; text-decoration: none; }\n#offline-state, .source, .count, #usage, .hint, figcaption, .back { color: var(--muted); font-size: .88rem; }\n#offline-state { font-size: .75rem; overflow-wrap: anywhere; }\nmain { padding-block: 3rem 5rem; }\nh1, h2, p, figure { margin: 0; }\nh1, h2 { overflow-wrap: anywhere; line-height: 1.35; }\nh1 { font-size: 2.5rem; letter-spacing: -.025em; }\nh2 { font-size: 1.26rem; }\n.title-row, .work-head, .shelf-tools { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }\n.title-row { margin-bottom: 1.1rem; }\n.title-row h1 { min-width: 0; font-size: clamp(1.8125rem, 3vw, 2.25rem); letter-spacing: .015em; }\n.nav-action, button { border: 1px solid var(--field-border); border-radius: .35rem; background: transparent; padding: .38rem .75rem; color: var(--ink); text-decoration: none; white-space: nowrap; }\n.nav-action { color: var(--muted); font-size: .8125rem; padding: .32rem .56rem; border-color: var(--line); }\n.nav-action:hover, button:enabled:hover { background: var(--hover); }\n.nav-action:active, button:enabled:active { background: var(--active); }\n.shelf-tools { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: .25rem 1rem; }\n.shelf-tools nav { display: flex; flex-wrap: wrap; column-gap: 1.3rem; }\n.shelf-tools a { display: flex; align-items: center; min-height: 44px; padding-bottom: .375rem; font-size: .875rem; color: var(--muted); text-decoration: none; }\n.shelf-tools a[aria-current] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); font-weight: 700; }\n#usage, .count, figcaption { font-variant-numeric: tabular-nums; }\n#usage, .work .source, .chapter-row .count { font-size: .75rem; }\n.work { padding-top: clamp(1.5rem, 3vw, 2rem); }\n.work-head { margin-bottom: .875rem; }\n.work-head > div { min-width: 0; }\n.work-head h2 {\n  font: 700 clamp(1.9375rem, 3vw, 2.375rem)/1.35 \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  letter-spacing: .025em;\n}\n.source { overflow-wrap: anywhere; }\n.chapter-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto 44px;\n  align-items: center;\n  column-gap: 1rem;\n  border-top: 1px solid var(--line);\n  padding-block: .75rem;\n}\n.chapter-row:last-child { border-bottom: 1px solid var(--line); }\n.chapter-link { font-weight: 570; overflow-wrap: anywhere; }\n.chapter-row .chapter-link { display: block; min-width: 0; font-size: 1.125rem; line-height: 1.48; font-weight: 650; letter-spacing: .015em; text-decoration: none; }\n.chapter-row .chapter-link:is(:hover, :focus-visible) { color: var(--accent); text-decoration: underline; }\n.chapter-heading { display: flex; align-items: baseline; gap: .625rem; }\n.chapter-heading > span { min-width: 0; }\n.chapter-ordinal { flex: none; max-width: 42%; font-size: .8125rem; font-weight: 500; letter-spacing: normal; color: var(--muted); }\n.chapter-separator { font-size: 0; }\n.chapter-subtitle { display: block; color: var(--muted); font-size: .88rem; font-weight: normal; overflow-wrap: anywhere; }\n.favorite { color: var(--muted); font-size: .75rem; padding: .32rem .56rem; border-color: var(--line); }\n.favorite[aria-pressed=\"true\"] { color: var(--favorite-ink); border-color: var(--favorite-border); background: var(--favorite-fill); }\n.chapter-row .favorite { display: grid; place-items: center; justify-self: end; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }\n.chapter-row .favorite[aria-pressed=\"true\"] { color: var(--accent); }\n.chapter-row .favorite:hover { background: var(--hover); }\n.chapter-row .favorite:active { background: var(--active); }\n.favorite[aria-disabled=\"true\"] { opacity: .55; cursor: wait; }\n.chapter-row .favorite svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; fill: none; }\n.chapter-row .favorite[aria-pressed=\"true\"] svg { fill: currentColor; }\n#export-tools { position: sticky; top: 0; z-index: 1; display: grid; gap: .25rem; padding-block: .75rem; background: var(--paper); border-bottom: 1px solid var(--line); }\n.export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }\n.export-actions > :is(button, a) { display: inline-flex; align-items: center; min-height: 44px; font-size: .875rem; }\n#export-tools button:disabled { cursor: default; }\n#export-status { margin-top: .25rem; font-size: .875rem; overflow-wrap: anywhere; }\n#export-status[data-error] { font-weight: 650; }\n.export-check { display: grid; place-items: center; width: 44px; height: 44px; cursor: pointer; }\n.export-check input { margin: 0; width: 1.125rem; height: 1.125rem; accent-color: var(--accent); scroll-margin-top: 10rem; }\n.chapter-row label.chapter-link { cursor: pointer; }\n.empty { padding: 4.5rem 0; }\n.empty p, .hint { margin-top: .7rem; color: var(--muted); max-width: 39rem; }\n#notice { margin-bottom: 1.25rem; padding: .7rem 1rem; background: var(--notice-surface, #f2e9cf); color: var(--notice-ink, #574722); border-radius: .3rem; overflow-wrap: anywhere; }\n#notice[data-tone=\"success\"] { background: var(--favorite-fill); color: var(--favorite-ink); font-weight: 650; }\n.notice-detail { display: block; margin-top: .25rem; font-weight: 400; }\n.notice-detail:empty { display: none; }\n.notice-detail a { display: inline-block; }\n.storage-retention { margin-top: 1.75rem; overflow-wrap: anywhere; }\n#request-retention { margin-top: .75rem; min-height: 44px; }\n.back { display: inline-block; margin-bottom: 1.25rem; }\n#storage h1 { margin-bottom: 1rem; }\nform { margin: 1.75rem 0 0; }\nlabel { display: block; font-weight: 650; }\n.field { display: flex; gap: .65rem; margin-top: .5rem; }\ninput { min-width: 0; width: 9rem; padding: .4rem .6rem; border: 1px solid var(--field-border); border-radius: .35rem; background: var(--field); color: var(--ink); }\n.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }\n.primary:is(a, :enabled):is(:hover, :active) { color: var(--on-accent); background: var(--accent-hover); }\n#reader { max-width: 48rem; margin-inline: auto; }\n#chapter-head p { margin-top: .35rem; }\n.reading-chapter #chapter-head h1 { font-size: 1.12rem; }\n.reading-chapter #chapter-head p { color: var(--muted); font-size: .85rem; }\n.reading-chapter #reader-return { margin: 0; }\n#reader-end { display: grid; gap: .6rem; }\n#reader-end:empty { display: none; }\n#reader-tools { height: 0; }\n.reading-chapter .masthead { display: none; }\n.reading-chapter main { width: 100%; padding: 0; }\n.reading-chapter #notice {\n  position: fixed;\n  z-index: 1;\n  inset: auto 0 .75rem;\n  margin: auto;\n  width: max-content;\n  max-width: calc(100% - 2rem);\n  max-height: 35dvh;\n  overflow: auto;\n}\n#pages figcaption {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip-path: inset(50%);\n  white-space: nowrap;\n}\n#reader[data-mode=\"scroll\"] #pages > * + * { margin-top: .25rem; }\n.page-slot { background: var(--slot); aspect-ratio: 2 / 3; width: 100%; }\n.page-slot img { display: block; width: 100%; height: auto; }\n.gap { padding: 1rem; text-align: center; background: var(--slot); color: var(--muted); }\n.theme-picker, .kg-reader-controls label {\n  display: flex;\n  align-items: center;\n  gap: .5rem;\n  font-size: .85rem;\n  font-weight: 500;\n  color: var(--muted);\n}\n.kg-reader-controls select, .theme-picker select {\n  border: 1px solid var(--field-border);\n  border-radius: .35rem;\n  color: var(--ink);\n  background: var(--field);\n  font: inherit;\n  font-size: .88rem;\n  padding: .3rem .55rem;\n  min-height: 2.1rem;\n}\n.kg-reader-controls select:hover, .theme-picker select:hover { background: var(--hover); }\n.theme-picker { flex: none; gap: .3125rem; font-size: .75rem; }\n.theme-picker select { min-height: 1.875rem; padding: .125rem .25rem; font-size: .75rem; border-color: var(--line); background: transparent; }\n.kg-reader-controls button:disabled { cursor: default; }\n.paged-reader #reader { max-width: none; }\n.paged-reader #pages {\n  display: flex;\n  justify-content: center;\n  width: 100%;\n  height: 100dvh;\n  gap: 2px;\n}\n.paged-reader #pages > * {\n  flex: 1 1 0;\n  min-width: 0;\n  direction: ltr;\n}\n.paged-reader .page-slot {\n  height: 100%;\n  background: transparent;\n}\n.paged-reader .page-slot img {\n  height: 100%;\n  object-fit: contain;\n}\n#pages[dir=\"rtl\"] { --first-spine: left; --second-spine: right; }\n#pages[dir=\"ltr\"] { --first-spine: right; --second-spine: left; }\n#reader[data-mode=\"double\"] figure:first-child:not(:only-child) img { object-position: var(--first-spine) center; }\n#reader[data-mode=\"double\"] figure:nth-child(2) img { object-position: var(--second-spine) center; }\n.paged-reader #pages > .gap { display: grid; place-items: center; }\n:root[data-reader-theme=\"dark\"] #notice { --notice-surface: #423b28; --notice-ink: #f0e2bc; }\n@media (max-width: 38rem) {\n  .topline, main { width: calc(100% - 2.5rem); }\n  main { padding-top: 1.6875rem; }\n  h1 { font-size: 1.95rem; }\n  .chapter-row { grid-template-columns: minmax(0, 1fr) 44px; column-gap: .375rem; padding-block: .8125rem .75rem; }\n  .chapter-row .count { grid-column: 1; margin-top: .125rem; }\n  .chapter-row :is(.favorite, .export-check) { grid-column: 2; grid-row: 1 / 3; }\n}\n@media (max-width: 22rem) {\n  .work-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .375rem .5rem; }\n  .work-head > div { display: contents; }\n  .work-head h2, .work-head > :only-child .source { grid-column: 1 / -1; }\n  .work-head .favorite { grid-column: 2; }\n}\n\n.kg-page-gestures { touch-action: pan-y pinch-zoom; }\n\n.kg-reader-controls input[type=\"checkbox\"] {\n  width: 1rem;\n  height: 1rem;\n  margin: 0;\n  padding: 0;\n  accent-color: var(--accent);\n}\n.kg-page-turns[data-direction=\"rtl\"] { flex-direction: row-reverse; }\n\ndialog.kg-thumb-picker {\n  position: fixed;\n  inset: 0;\n  margin: auto;\n  box-sizing: border-box;\n  width: 94vw;\n  height: 92dvh;\n  max-width: 100%;\n  max-height: 100dvh;\n  padding: 0;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--paper);\n  color: var(--ink);\n  font: inherit;\n  text-align: start;\n}\ndialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }\n.kg-thumb-picker::backdrop { background: rgb(9 14 10 / 68%); }\n.kg-thumb-head, .kg-thumb-footer {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: .75rem;\n  padding: .75rem 1rem;\n}\n.kg-thumb-head { flex-wrap: wrap; border-bottom: 1px solid var(--line); }\n.kg-thumb-head strong { font-size: 1.1rem; margin: 0; }\n.kg-thumb-range {\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n}\n.kg-thumb-head .kg-thumb-size {\n  display: inline-flex;\n  align-items: center;\n  gap: .4rem;\n  margin-inline-start: auto;\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  white-space: nowrap;\n}\n.kg-thumb-size select { min-height: 2.1rem; }\n.kg-thumb-footer { justify-content: space-between; border-top: 1px solid var(--line); }\n.kg-thumb-grid {\n  --tile-min: 6rem;\n  display: grid;\n  flex: 1 1 0;\n  min-height: 0;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile-min)), 1fr));\n  grid-auto-rows: max-content;\n  align-content: start;\n  gap: .75rem;\n  padding: 1rem;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scroll-padding: 1rem;\n}\n.kg-thumb-grid[data-size=\"small\"] { --tile-min: 4rem; }\n.kg-thumb-grid[data-size=\"large\"] { --tile-min: clamp(15rem, 24vw, 26rem); }\n.kg-thumb-grid .kg-thumb-page {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: .22rem;\n  min-width: 0;\n  padding: .25rem;\n  border: 1px solid transparent;\n  border-radius: .35rem;\n  background: transparent;\n  color: var(--ink);\n  font: inherit;\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n  white-space: normal;\n  cursor: pointer;\n}\n.kg-thumb-grid .kg-thumb-page:hover { background: var(--hover); }\n.kg-thumb-grid .kg-thumb-page[aria-current=\"page\"] {\n  border-color: var(--accent);\n  color: var(--accent);\n  font-weight: 700;\n}\n.kg-thumb-frame {\n  display: grid;\n  place-items: center;\n  width: 100%;\n  flex: none;\n  aspect-ratio: 3 / 4;\n  overflow: hidden;\n  background: var(--slot, var(--well));\n  color: var(--muted, var(--ink));\n  font-size: .8rem;\n}\n.kg-thumb-frame img {\n  display: block;\n  width: 100%;\n  height: 100%;\n  min-height: 0;\n  object-fit: contain;\n}\n@media (max-width: 38rem) {\n  dialog.kg-thumb-picker { width: calc(100vw - .5rem); height: calc(100dvh - 1rem); }\n  .kg-thumb-head { gap: .4rem .6rem; padding: .6rem; }\n  .kg-thumb-grid { --tile-min: 4.8rem; gap: .5rem; padding: .65rem; }\n  .kg-thumb-grid[data-size=\"small\"] { --tile-min: 3.3rem; }\n  .kg-thumb-grid[data-size=\"large\"] { --tile-min: 12rem; }\n}\n.kg-reader-controls {\n  --edge-width: 2.5rem;\n  --edge-surface: var(--paper);\n  display: contents;\n}\n.kg-reader-controls[hidden] { display: none; }\n.kg-edge, .kg-edge-panel {\n  display: flex;\n  align-items: center;\n}\n.kg-edge {\n  position: fixed;\n  top: 50%;\n  transform: translateY(-50%);\n  z-index: 8;\n  pointer-events: none;\n}\n.kg-edge-left { left: env(safe-area-inset-left, 0px); }\n.kg-edge-right { right: env(safe-area-inset-right, 0px); flex-direction: row-reverse; }\n.kg-reader-controls .kg-edge-toggle {\n  position: relative;\n  padding: .7rem .35rem;\n  width: var(--edge-width);\n  min-height: 3.8rem;\n  display: grid;\n  place-items: center;\n  border: 1px solid var(--line);\n  background: color-mix(in srgb, var(--edge-surface) 91%, transparent);\n  color: var(--ink);\n  font: inherit;\n  font-size: .8rem;\n  font-weight: 600;\n  letter-spacing: .1em;\n  line-height: 1;\n  writing-mode: vertical-rl;\n  text-orientation: upright;\n  pointer-events: auto;\n  cursor: pointer;\n}\n.kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }\n.kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }\n.kg-edge-toggle:lang(en) { text-orientation: mixed; }\n.kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded=\"true\"]) {\n  background: var(--hover);\n  color: var(--accent);\n}\n.kg-edge .kg-edge-panel {\n  position: absolute;\n  width: 15rem;\n  max-width: calc(100vw - 2 * var(--edge-width) - 1.25rem);\n  max-height: calc(100dvh - 2rem);\n  flex-direction: column;\n  align-items: stretch;\n  gap: .65rem;\n  margin: 0;\n  padding: 1rem;\n  overflow: auto;\n  overscroll-behavior: contain;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--edge-surface);\n  color: var(--ink);\n  box-shadow: 0 .3rem 1.2rem rgb(0 0 0 / 18%);\n  font-size: .9rem;\n  line-height: 1.45;\n  pointer-events: auto;\n}\n.kg-edge-panel[hidden] { display: none; }\n.kg-edge-left .kg-edge-panel { left: calc(100% + .35rem); }\n.kg-edge-right .kg-edge-panel { right: calc(100% + .35rem); }\n.kg-edge-panel h2 {\n  margin: 0 0 .2rem;\n  color: var(--ink);\n  font: inherit;\n  font-size: 1.05rem;\n  font-weight: 700;\n}\n.kg-edge-panel > label {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: .6rem;\n  font-size: .875rem;\n}\n.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }\n.kg-edge-panel > label:has(input) { justify-content: start; }\n.kg-edge-extras {\n  display: grid;\n  gap: .6rem;\n  min-width: 0;\n  padding-top: .75rem;\n  border-top: 1px solid var(--line);\n}\n.kg-edge-extras:not(:has(> :not([hidden]))) { display: none; }\n.kg-page-turns {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .25rem;\n}\n.kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }\n.kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }\n.kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }\n</style></head>\n<body>\n  <header class=\"masthead\">\n    <div class=\"topline\">\n      <a class=\"brand\" href=\"#shelf\" aria-label=\"KomaGlide 本站書庫首頁\" data-i18n-label=\"siteLibraryHome\">KomaGlide</a>\n      <div class=\"masthead-tools\">\n        <span id=\"offline-state\" role=\"status\" data-i18n=\"preparingLibrary\"></span>\n        <label class=\"theme-picker\" for=\"library-theme\"><span data-i18n=\"appearance\">外觀</span>\n          <select id=\"library-theme\">\n            <option value=\"system\" data-i18n=\"systemTheme\">跟隨系統</option>\n            <option value=\"light\" data-i18n=\"lightTheme\">淺色</option>\n            <option value=\"dark\" data-i18n=\"darkTheme\">深色</option>\n          </select>\n        </label>\n        <label class=\"theme-picker\" for=\"library-language\">\n          <span data-i18n=\"language\">語言</span>\n          <select id=\"library-language\"></select>\n        </label>\n      </div>\n    </div>\n  </header>\n  <main>\n    <p id=\"notice\" role=\"status\" hidden></p>\n    <section id=\"shelf\">\n      <div class=\"title-row\">\n        <h1 data-i18n=\"siteLibrary\">本站書庫</h1>\n        <a class=\"nav-action\" href=\"#storage\" data-i18n=\"storageSettings\">容量設定</a>\n      </div>\n      <div class=\"shelf-tools\">\n        <nav aria-label=\"書庫篩選\" data-i18n-label=\"libraryFilters\">\n          <a href=\"#shelf\" id=\"all-tab\" data-i18n=\"allWorks\">全部作品</a>\n          <a href=\"#favorites\" id=\"star-tab\" data-i18n=\"favorites\">收藏</a>\n          <a href=\"#export\" id=\"export-tab\" data-i18n=\"exportMode\">匯出模式</a>\n        </nav>\n        <span id=\"usage\"></span>\n      </div>\n      <div id=\"export-tools\" hidden>\n        <div class=\"export-actions\">\n          <button id=\"export-select-all\" type=\"button\" data-i18n=\"exportSelectAll\" disabled>全選</button>\n          <button id=\"export-prepare\" class=\"primary\" type=\"button\" data-i18n=\"exportPrepare\" disabled>準備 ZIP</button>\n          <a id=\"export-download\" class=\"nav-action primary\" data-i18n=\"exportDownload\" hidden>下載 ZIP</a>\n        </div>\n        <p id=\"export-selection\" class=\"count\" role=\"status\"></p>\n        <p class=\"count\" data-i18n=\"exportSavedOnly\">ZIP 包含已儲存的漫畫頁。</p>\n        <p id=\"export-status\" role=\"status\" hidden></p>\n      </div>\n      <div id=\"books\"></div>\n    </section>\n    <section id=\"storage\" hidden>\n      <a class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <h1 data-i18n=\"storageSettings\">容量設定</h1>\n      <p id=\"storage-summary\"></p>\n      <form id=\"limit-form\">\n        <label for=\"limit\" data-i18n=\"storageLimit\">書庫容量上限（MiB）</label>\n        <div class=\"field\"><input type=\"number\" id=\"limit\" required min=\"1\" step=\"1\"><button class=\"primary\" type=\"submit\" data-i18n=\"saveLimit\">儲存上限</button></div>\n      </form>\n      <p class=\"hint\" data-i18n=\"limitHint\">收藏和一般快取共用容量。調低上限時，書庫會優先移除最久沒讀且未收藏的章節。</p>\n      <section class=\"storage-retention\" aria-labelledby=\"retention-title\">\n        <h2 id=\"retention-title\" data-i18n=\"storageProtection\">瀏覽器儲存保護</h2>\n        <p class=\"hint\" id=\"retention\" role=\"status\"></p>\n        <p class=\"hint\" data-i18n=\"storageProtectionHint\">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>\n        <button id=\"request-retention\" type=\"button\" data-i18n=\"requestPersistence\">申請持久儲存</button>\n        <p class=\"hint\" id=\"retention-result\" role=\"status\"></p>\n      </section>\n    </section>\n    <section id=\"reader\" hidden>\n      <a id=\"reader-return\" class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <div id=\"chapter-head\"></div>\n      <div id=\"reader-tools\"></div>\n      <div id=\"pages\"></div>\n      <nav id=\"reader-end\" aria-label=\"話數導覽\" data-i18n-label=\"chapterNavigation\"></nav>\n    </section>\n    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>\n  </main>\n</body>\n</html>\n", 'text/html');
     document.open();
     document.close();
     const root = document.importNode(shell.documentElement, true);
@@ -1441,6 +1512,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }
     mountShelf(SHELF_HASH, {
       ...getShelfEvents(),
       saveLanguage: value => write(languageKey, value),
+      openNovel: openShelfNovel,
     });
     document.getElementById('offline-state').textContent = location.host;
   }
@@ -2141,7 +2213,7 @@ siteAdapters.push(function detectGeneric(root, address) {
 
   function mountNovelReader(document, window, source) {
   'use strict';
-  const {chapters, workTitle, loadChapter, initialChapter, close, signal} = source;
+  const {chapters, workTitle, loadChapter, initialChapter, close, signal, offline} = source;
   const storageKey = source.storageKey;
   const $ = id => document.getElementById(id);
   const reader = $('reader');
@@ -2155,15 +2227,30 @@ siteAdapters.push(function detectGeneric(root, address) {
   $('work-source').textContent = source.siteName;
   $('work-title').textContent = workTitle;
   $('header-work').textContent = workTitle;
-  $('chapter-count').textContent = '全 ' + chapters.length + ' 章';
+  const chapterCount = (offline ? '已存 ' : '全 ') + chapters.length + ' 章';
+  $('chapter-count').textContent = chapterCount;
   $('contents-title').textContent = workTitle + ' · 目錄';
   if (close) {
     $('reader-close').hidden = false;
+    if (source.closeLabel) $('reader-close').textContent = source.closeLabel;
     $('reader-close').onclick = close;
   }
   let saved;
   try { saved = JSON.parse(window.localStorage.getItem(key)); } catch { /* Private browsing can disable storage. */ }
   const state = saved && typeof saved === 'object' ? saved : {};
+  const chapterProgressKey = id => key + '.progress.' + encodeURIComponent(id);
+  function savedPosition(id) {
+    if (state.chapter === id && state.anchor) return state.anchor;
+    try { return JSON.parse(window.localStorage.getItem(chapterProgressKey(id))); }
+    catch { return null; }
+  }
+  // Preserve the previous single-chapter bookmark when opening another chapter after an update.
+  if (typeof state.chapter === 'string' && state.anchor) {
+    try {
+      const oldKey = chapterProgressKey(state.chapter);
+      if (window.localStorage.getItem(oldKey) === null) window.localStorage.setItem(oldKey, JSON.stringify(state.anchor));
+    } catch { /* Storage can be unavailable. */ }
+  }
   const initial = chapters.findIndex(chapter => chapter.id === state.chapter);
   const entry = chapters.findIndex(chapter => chapter.id === initialChapter);
   let current = -1;
@@ -2174,7 +2261,10 @@ siteAdapters.push(function detectGeneric(root, address) {
   const prose = $('prose');
   const paged = () => reader.dataset.mode === 'paged';
   const vertical = () => reader.dataset.writing === 'vertical';
-  const scroller = () => vertical() ? prose : reader;
+  const nativeScroll = () => source.nativeScroll && !vertical() && !paged();
+  const scroller = () => nativeScroll() ? document.scrollingElement : vertical() ? prose : reader;
+  const readingEdge = () => nativeScroll() ? document.querySelector('header').getBoundingClientRect().bottom :
+    blockStart(scroller().getBoundingClientRect());
   let pages = [], pageIndex = 0;
   // Keep a logical text offset even if changing the layout moves it into the middle of a page.
   let readingAnchor = {paragraph: 0, offset: 0};
@@ -2246,7 +2336,7 @@ siteAdapters.push(function detectGeneric(root, address) {
   }
   function position() {
     if (paged()) return readingAnchor;
-    const edge = blockStart(scroller().getBoundingClientRect());
+    const edge = readingEdge();
     const nodes = [...prose.children];
     const index = nodes.findIndex(p => {
       const rect = p.getBoundingClientRect();
@@ -2270,6 +2360,7 @@ siteAdapters.push(function detectGeneric(root, address) {
     const offset = anchor?.offset ?? Math.round((anchor?.fraction || 0) * paragraphs[index].length);
     readingAnchor = atStart(index, Math.max(0, Math.min(paragraphs[index].length - 1, offset)));
     reader.scrollTop = 0;
+    if (nativeScroll()) window.scrollTo(0, 0);
     if (paged()) {
       paginate();
       const target = lastPage ? pages.length - 1 : pageFor(readingAnchor);
@@ -2279,10 +2370,10 @@ siteAdapters.push(function detectGeneric(root, address) {
       prose.replaceChildren(...paragraphs.map(paragraphNode));
       prose.scrollLeft = prose.scrollTop = 0;
       if (index || readingAnchor.offset) {
-        const edge = blockStart(scroller().getBoundingClientRect());
+        const edge = readingEdge();
         const distance = blockStart(charRect(prose.children[index], readingAnchor.offset)) - edge;
         if (vertical()) prose.scrollLeft -= distance;
-        else reader.scrollTop += distance;
+        else scroller().scrollTop += distance;
       }
       updateProgress();
     }
@@ -2300,6 +2391,10 @@ siteAdapters.push(function detectGeneric(root, address) {
     const last = !paged() || pageIndex === pages.length - 1;
     $('previous').textContent = first ? '上一章' : '上一頁';
     $('next').textContent = last ? '下一章' : '下一頁';
+    if (offline) {
+      $('previous').setAttribute('aria-label', first ? '上一章（已存）' : '上一頁');
+      $('next').setAttribute('aria-label', last ? '下一章（已存）' : '下一頁');
+    }
     $('previous').disabled = first && current === 0;
     $('next').disabled = last && current === chapters.length - 1;
     $('steps').classList.toggle('reverse', paged() && vertical());
@@ -2309,10 +2404,13 @@ siteAdapters.push(function detectGeneric(root, address) {
     state.chapter = chapters[current].id;
     const {paragraph, offset} = position();
     state.anchor = {paragraph, offset};
+    try { window.localStorage.setItem(chapterProgressKey(state.chapter), JSON.stringify(state.anchor)); }
+    catch { /* The work bookmark is also stored with the reading preferences. */ }
     persist();
   }
   async function selectChapter(index, lastPage = false, anchor = null) {
     if (loading || index < 0 || index >= chapters.length) return;
+    if (current >= 0 && current !== index) remember();
     if (contents.open) contents.close();
     if (current !== index || !prose.children.length) {
       const chapter = chapters[index];
@@ -2325,7 +2423,8 @@ siteAdapters.push(function detectGeneric(root, address) {
         try {
           chapter.paragraphs = await loadChapter(chapter, signal);
         } catch {
-          if (!signal?.aborted) status.textContent = '無法載入章節，請從目錄重試或返回原站。';
+          if (!signal?.aborted) status.textContent = offline
+            ? '無法開啟已存章節，請返回書庫。' : '無法載入章節，請從目錄重試或返回原站。';
           return;
         } finally {
           loading = false;
@@ -2342,21 +2441,22 @@ siteAdapters.push(function detectGeneric(root, address) {
   }
   function render(anchor, lastPage = false) {
     const chapter = chapters[current];
-    $('number').textContent = '第 ' + (current + 1) + ' 章';
+    $('number').textContent = '第 ' + (chapter.order ?? current + 1) + ' 章';
     $('chapter-title').textContent = chapter.title;
     document.title = chapter.title + ' · ' + workTitle + ' · KomaGlide';
     const length = chapter.paragraphs.join('').replace(/[\p{P}\s]/gu, '').length;
-    $('meta').textContent = workTitle + '　／　' + length + ' 字';
+    $('meta').textContent = workTitle + '　／　' + length + ' 字' +
+      (chapter.cacheFailed ? '　／　' + source.cacheFailure : '');
     locateChapter.disabled = false;
     for (const link of document.querySelectorAll('.chapter-link')) {
       if (Number(link.dataset.index) === current) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
     const end = $('chapter-end');
-    if (current === chapters.length - 1) end.textContent = '全書完';
+    if (current === chapters.length - 1) end.textContent = offline ? '這是最後一個已存章節' : '全書完';
     else {
       const next = document.createElement('button');
-      next.textContent = '下一章　' + chapters[current + 1].title + '　→';
+      next.textContent = (offline ? '下一個已存章節' : '下一章') + '　' + chapters[current + 1].title + '　→';
       next.onclick = () => selectChapter(current + 1);
       end.replaceChildren(next);
     }
@@ -2369,12 +2469,12 @@ siteAdapters.push(function detectGeneric(root, address) {
       button.dataset.index = index;
       const num = document.createElement('span');
       num.className = 'chapter-num';
-      num.textContent = String(index + 1).padStart(2, '0');
+      num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
       const name = document.createElement('span');
       name.className = 'chapter-name';
       name.textContent = chapter.title;
       button.append(num, name);
-      button.onclick = () => selectChapter(index);
+      button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
       nav.append(button);
     });
   }
@@ -2385,12 +2485,12 @@ siteAdapters.push(function detectGeneric(root, address) {
     const ordinal = /^\d+$/.test(query) ? Number(query) : null;
     let matches = 0;
     chapterRows.forEach((row, index) => {
-      const match = ordinal === null ? chapterTitles[index].includes(query) : index + 1 === ordinal;
+      const match = ordinal === null ? chapterTitles[index].includes(query) : (chapters[index].order ?? index + 1) === ordinal;
       row.hidden = !match;
       if (match) matches++;
     });
     $('chapter-results').textContent = matches === 0 ? '找不到符合的章節' :
-      query ? '找到 ' + matches + ' 章' : '全 ' + matches + ' 章';
+      query ? '找到 ' + matches + ' 章' : chapterCount;
     mobileToc.scrollTop = 0;
   }
   function showCurrentChapter() {
@@ -2452,7 +2552,7 @@ siteAdapters.push(function detectGeneric(root, address) {
   }
   $('previous').onclick = () => step(-1);
   $('next').onclick = () => step(1);
-  document.addEventListener('keydown', event => {
+  document.documentElement.addEventListener('keydown', event => {
     if (event.key === 'Escape' && close && !document.querySelector('dialog[open]')) {
       event.preventDefault();
       close();
@@ -2475,30 +2575,47 @@ siteAdapters.push(function detectGeneric(root, address) {
   function clearGesture() { gesture = null; }
   function readingZoomed() { return (window.visualViewport?.scale ?? 1) > 1.01; }
   function hasSelection() { return Boolean(window.getSelection()?.toString()); }
-  document.addEventListener('touchstart', event => {
+  document.documentElement.addEventListener('touchstart', event => {
     if (event.touches.length > 1) clearGesture();
   }, {capture:true, passive:true});
-  prose.addEventListener('touchstart', event => {
+  function atChapterEnd() {
+    const area = scroller();
+    const remaining = vertical() ? area.scrollWidth - area.clientWidth - Math.abs(area.scrollLeft) :
+      area.scrollHeight - area.clientHeight - area.scrollTop;
+    return remaining <= 2;
+  }
+  reader.addEventListener('touchstart', event => {
     clearGesture();
-    if (!paged() || event.touches.length !== 1 || readingZoomed() || hasSelection()) return;
+    if (event.touches.length !== 1 || readingZoomed() || hasSelection() || loading || current < 0) return;
+    if (paged() ? !prose.contains(event.target) : event.target.closest('button,a,input,select')) return;
+    if (!paged() && (current + 1 >= chapters.length || !atChapterEnd())) return;
     const touch = event.touches[0];
-    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false};
+    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false, chapter: current, paged: paged(), vertical: vertical()};
   }, {passive:true});
-  prose.addEventListener('touchmove', event => {
+  reader.addEventListener('touchmove', event => {
     if (!gesture) return;
     const touch = event.touches[0];
     if (!touch || event.touches.length !== 1 || touch.identifier !== gesture.id) return clearGesture();
     if (Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > 12) gesture.moved = true;
   }, {passive:true});
-  prose.addEventListener('contextmenu', clearGesture);
-  prose.addEventListener('touchcancel', clearGesture, {passive:true});
-  prose.addEventListener('touchend', event => {
+  reader.addEventListener('contextmenu', clearGesture);
+  reader.addEventListener('touchcancel', clearGesture, {passive:true});
+  reader.addEventListener('touchend', event => {
     const start = gesture;
     clearGesture();
-    if (!start || event.touches.length || !paged() || readingZoomed() || hasSelection()) return;
+    if (!start || event.touches.length || start.chapter !== current || start.paged !== paged() ||
+        start.vertical !== vertical() || readingZoomed() || hasSelection()) return;
     const touch = event.changedTouches[0];
     if (touch.identifier !== start.id) return;
     const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
+    if (!paged()) {
+      const distance = vertical() ? dx : -dy;
+      const across = vertical() ? dy : dx;
+      const duration = event.timeStamp - start.time;
+      if (atChapterEnd() && distance >= 64 && distance > Math.abs(across) * 1.5 &&
+          distance >= duration * 0.3) step(1);
+      return;
+    }
     const forward = vertical() ? -1 : 1;
     if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       step(-Math.sign(dx) * forward);
@@ -2516,8 +2633,11 @@ siteAdapters.push(function detectGeneric(root, address) {
     root.style.setProperty('--leading', $('leading').value);
     reader.dataset.mode = $('mode').value;
     reader.dataset.writing = $('writing').value;
-    $('gesture-hint').hidden = !paged();
-    $('gesture-hint').textContent = vertical() ? '點正文左側或向右滑可翻到下一頁；點右側或向左滑可往回翻。' :
+    document.documentElement.classList.toggle('native-scroll', Boolean(nativeScroll()));
+    $('gesture-hint').hidden = false;
+    $('gesture-hint').textContent = !paged()
+      ? (vertical() ? '讀到章末後，再用力向右滑一次可進入下一章。' : '滑到章末後，再用力向上滑一次可進入下一章。')
+      : vertical() ? '點正文左側或向右滑可翻到下一頁；點右側或向左滑可往回翻。' :
       '點正文右側或向左滑可翻到下一頁；點左側或向右滑可往回翻。';
     $('size-output').value = $('size').value + ' px';
   }
@@ -2542,15 +2662,17 @@ siteAdapters.push(function detectGeneric(root, address) {
   }
   applySettings();
   const startIndex = entry >= 0 ? entry : Math.max(0, initial);
-  void selectChapter(startIndex, false, startIndex === initial ? state.anchor : null);
+  void selectChapter(startIndex, false, savedPosition(chapters[startIndex].id));
   let saveTimer;
-  for (const area of [reader, prose]) {
+  for (const area of (source.nativeScroll ? [reader, prose, document] : [reader, prose])) {
     area.addEventListener('scroll', () => {
-      if (current < 0 || paged() || area !== scroller()) return;
+      if (current < 0 || paged() || (area === document ? !nativeScroll() : area !== scroller())) return;
       updateProgress();
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(remember, 150);
-    }, {passive:true});
+      if (!saveTimer) saveTimer = setTimeout(() => {
+        saveTimer = undefined;
+        remember();
+      }, 150);
+    }, {passive:true, signal});
   }
   const resizeObserver = new window.ResizeObserver(() => {
     if (current < 0) return;
@@ -2559,13 +2681,20 @@ siteAdapters.push(function detectGeneric(root, address) {
   });
   resizeObserver.observe(reader);
   document.fonts.ready.then(() => { if (!signal?.aborted && current >= 0 && paged()) layout(readingAnchor); });
-  window.addEventListener('pagehide', remember);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') remember();
+  }, {signal});
+  window.addEventListener('pagehide', remember, {signal});
   signal?.addEventListener('abort', () => {
     remember();
     resizeObserver.disconnect();
     clearTimeout(saveTimer);
   }, {once:true});
 }
+
+const CZBOOKS_SITE = '小說狂人';
+const czbooksNovelStorageKey = workId => PREFIX + 'novel.czbooks.' + workId;
+let disposeSourceNovel;
 
 function detectCzbooks(root, address) {
   if (address.hostname !== 'czbooks.net') return null;
@@ -2618,22 +2747,121 @@ function detectCzbooks(root, address) {
         chapters.set(id, {id, title: name, url: url.href});
       }
       if (!chapters.size || (chapterId && !chapters.has(chapterId))) throw new Error('找不到章節目錄');
+      const ordered = [...chapters.values()];
+      ordered.forEach((chapter, index) => { chapter.order = index + 1; });
       return {
-        chapters: [...chapters.values()],
+        chapters: ordered,
         workTitle,
-        siteName: '小說狂人',
+        siteName: CZBOOKS_SITE,
         initialChapter: chapterId,
-        storageKey: PREFIX + 'novel.czbooks.' + workId,
-        loadChapter: async (chapter, abortSignal) => chapterText(
-          chapter.id === chapterId ? root : await readPage(chapter.url, abortSignal)
-        ),
+        storageKey: czbooksNovelStorageKey(workId),
+        cacheFailure: t('novelCacheFailed'),
+        async loadChapter(chapter, abortSignal) {
+          const key = [CZBOOKS_SITE, workId, chapter.id];
+          if (chapter.id !== chapterId) {
+            const cached = await readNovelChapter(key).catch(() => null);
+            abortSignal.throwIfAborted();
+            if (cached) return cached;
+          }
+          const paragraphs = chapterText(chapter.id === chapterId ? root : await readPage(chapter.url, abortSignal));
+          abortSignal.throwIfAborted();
+          try {
+            await putNovelChapter({
+              site: CZBOOKS_SITE, workId, chapterId: chapter.id, workTitle,
+              chapterTitle: chapter.title, order: chapter.order
+            }, paragraphs);
+          } catch (error) {
+            chapter.cacheFailed = true;
+            console.warn('[KomaGlide]', error.message);
+            return paragraphs;
+          }
+          getShelfEvents().announce({kind: 'novel-saved'});
+          void rememberSite();
+          return paragraphs;
+        },
       };
     },
   };
 }
 
+function showNovelReader(source, request, onClose) {
+  const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>潮汐郵局 · KomaGlide 小說閱讀器</title>\n<style>\n:root {\n  --serif: \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  --size: 20px; --leading: 1.95;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n}\n:root, [data-theme=\"paper\"] {\n  color-scheme: light;\n  --paper: #fbfaf5; --side: #f0f0e7; --ink: #252f2a; --muted: #58665c;\n  --line: #d3d7ca; --accent: #345d49; --wash: #dfe8d9; --stamp: #9a4837;\n}\n[data-theme=\"sepia\"] {\n  color-scheme: light; --paper: #f3e5cb; --side: #eaddc2; --ink: #483522; --muted: #70573e;\n  --line: #cdbca0; --accent: #77512f; --wash: #e8d6b9; --stamp: #86452f;\n}\n[data-theme=\"sage\"] {\n  color-scheme: light; --paper: #e4eddd; --side: #d9e4d2; --ink: #263a2b; --muted: #4e624f;\n  --line: #b6c8b3; --accent: #345c42; --wash: #cfdfc8; --stamp: #725038;\n}\n[data-theme=\"night\"] {\n  color-scheme: dark; --paper: #1c2421; --side: #202b25; --ink: #e6e8dd; --muted: #b0bcaf;\n  --line: #415046; --accent: #b2cdb6; --wash: #324639; --stamp: #ebaa91;\n}\n[data-theme=\"navy\"] {\n  color-scheme: dark; --paper: #172236; --side: #1c293e; --ink: #dce3f1; --muted: #adbbcf;\n  --line: #3b4e6a; --accent: #acc8ec; --wash: #2d4059; --stamp: #e9b599;\n}\n[data-theme=\"black\"] {\n  color-scheme: dark; --paper: #000000; --side: #101010; --ink: #dbdbdb; --muted: #a8a8a8;\n  --line: #424242; --accent: #d3d3d3; --wash: #292929; --stamp: #c9b7a3;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--paper); color: var(--ink); }\nbutton, select, input { font: inherit; color: inherit; }\nbutton { cursor: pointer; border: 0; background: transparent; }\nbutton:disabled { opacity: .35; cursor: default; }\nbutton:hover:enabled { background: var(--wash); }\n:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\nheader, footer { padding-inline: clamp(12px, 2.5vw, 40px); }\nheader { display: flex; align-items: center; gap: 14px; min-height: 56px; border-bottom: 1px solid var(--line); }\n.header-work { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 600 15px var(--serif); }\nheader .brand { padding-right: 14px; border-right: 1px solid var(--line); }\n#reader-close { color: var(--muted); white-space: nowrap; }\n#sidebar-toggle { color: var(--accent); background: var(--wash); }\n.brand { font: 750 21px/1 \"DM Sans\", system-ui, sans-serif; letter-spacing: -1px; }\n.brandmark { display: inline-grid; grid-template-columns: repeat(2, 7px); gap: 3px; transform: skewY(-12deg); margin-right: 9px; vertical-align: -1px; }\n.brandmark::before,.brandmark::after { content: \"\"; height: 16px; border-radius: 1px; background: var(--accent); }\n.brandmark::after { height: 13px; }\n.tool { min-height: 44px; padding: 6px 12px; border-radius: 6px; font-size: 14px; }\n.tool b { font: 600 18px Georgia, serif; margin-right: 6px; }\n#contents-open { display: none; }\n.layout { min-height: 0; display: grid; grid-template-columns: clamp(232px, 24vw, 316px) minmax(0, 1fr); }\n.layout[data-sidebar-collapsed] { grid-template-columns: minmax(0, 1fr); }\naside { padding: clamp(22px, 3vw, 42px); overflow: auto; background: var(--side); border-right: 1px solid var(--line); }\n.cover { position: relative; isolation: isolate; overflow: hidden; background: #365847; color: #faf4db; padding: 19px 21px; width: 100%; max-width: 242px; min-height: 144px; border-left: 6px double #a9b09a; }\n.cover::after { content: \"\"; position: absolute; z-index: -1; width: 230%; height: 235%; left: -23%; top: 40%; background: repeating-radial-gradient(ellipse, transparent 0 6px, #b4c4a261 7px 8px, transparent 9px 14px); transform: rotate(-16deg); }\n.cover small { font: 10px ui-monospace, monospace; letter-spacing: 2px; }\n.cover strong { display: block; font: 600 29px/1.6 var(--serif); letter-spacing: .12em; }\n.contents-title { display: flex; align-items: baseline; justify-content: space-between; margin: 34px 0 12px; }\n.contents-title h2 { margin: 0; font-size: 15px; }\n.contents-title small,.chapter-num { color: var(--muted); font: 12px ui-monospace, monospace; }\n.chapter-link { display: flex; align-items: baseline; width: 100%; text-align: left; gap: 14px; padding: 14px 10px; border-radius: 4px; font-size: 15px; }\n.chapter-link[hidden] { display: none; }\n.chapter-num { flex: none; font-variant-numeric: tabular-nums; }\n.chapter-name { min-width: 0; overflow-wrap: anywhere; }\n.chapter-link[aria-current] { color: var(--accent); background: var(--wash); font-weight: 700; box-shadow: inset 2px 0 var(--accent); }\nmain { overflow: auto; scrollbar-gutter: stable; }\narticle { margin: auto; max-width: 43rem; padding: clamp(34px, 5.5vw, 80px) clamp(22px, 3.5vw, 50px) 64px; box-sizing: content-box; }\n.chapter-label { display: flex; align-items: center; gap: 11px; color: var(--stamp); font-size: 13px; letter-spacing: .12em; }\n.chapter-label::before { content: \"\"; width: 29px; border-top: 1px solid; }\nh1 { font: 700 clamp(32px, 4vw, 54px)/1.35 var(--serif); letter-spacing: .045em; margin: 14px 0 8px; }\n.meta { font-size: 13px; color: var(--muted); margin: 0 0 29px; }\n.prose { border-top: 1px solid var(--line); padding-top: 12px; font: var(--size)/var(--leading) var(--serif); letter-spacing: .035em; overflow-wrap: anywhere; }\n.prose p { margin: 1em 0 0; }\n#chapter-end { margin: 38px 0 0; border-top: 1px solid var(--line); padding-top: 18px; text-align: right; }\n#chapter-end button,.step { padding: 8px 12px; border-radius: 6px; min-height: 44px; }\nfooter {\n  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;\n  padding-block: 4px max(4px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line);\n  background: var(--paper); font-size: 14px;\n}\n#contents-open { grid-column: 1; justify-self: start; }\n#steps { grid-column: 2; display: flex; gap: 10px; align-items: center; }\n#steps.reverse { flex-direction: row-reverse; }\n#settings-open { grid-column: 3; justify-self: end; }\n.step { color: var(--accent); background: var(--wash); white-space: nowrap; font-weight: 600; }\n.step:hover:enabled { box-shadow: inset 0 0 0 1px var(--accent); }\n.progress { min-width: 100px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }\n#progress-label { margin-right: 5px; font-size: 12px; }\nprogress { display: block; width: 100%; height: 3px; margin-top: 3px; accent-color: var(--accent); }\ndialog { background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; width: min(360px, calc(100% - 28px)); padding: 22px; box-shadow: 0 16px 60px #14251b25; }\ndialog::backdrop { background: #18241d45; }\n.dialog-head { display: flex; align-items: center; justify-content: space-between; }\n.dialog-head h2 { margin: 0; font-size: 20px; }\n.dialog-head button { font-size: 22px; width: 44px; height: 44px; }\n#contents[open] {\n  position: fixed; inset: 0; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none;\n  height: 100dvh; border: 0; border-radius: 0; padding: 0;\n  display: flex; flex-direction: column; overflow: hidden;\n}\n.contents-controls {\n  flex: none; border-bottom: 1px solid var(--line);\n  padding: max(8px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left));\n}\n.contents-controls .dialog-head { gap: 8px; margin-bottom: 8px; }\n.contents-controls h2 {\n  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;\n  overflow: hidden; overflow-wrap: anywhere; font-size: 17px; line-height: 1.35;\n}\n.contents-controls .dialog-head button { flex: none; }\n.chapter-search {\n  min-height: 44px; padding: 7px 10px; border: 1px solid var(--muted); border-radius: 5px;\n  background: var(--paper); font-size: 16px;\n}\n.contents-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\n.contents-actions p { color: var(--muted); font-size: 13px; margin: 0; }\n#locate-chapter { min-height: 44px; padding: 8px; border-radius: 5px; font-size: 14px; }\n#mobile-toc {\n  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;\n  padding: 6px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));\n}\n#mobile-toc .chapter-link { min-height: 48px; line-height: 1.45; }\n#mobile-toc .chapter-link:focus-visible { outline-offset: -2px; }\n.setting { margin-top: 18px; display: grid; gap: 8px; font-size: 14px; }\n.palettes { margin: 18px 0 0; padding: 0; border: 0; }\n.palettes legend { padding: 0; font-size: 14px; }\n.palette-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }\n.palette-group { margin: 10px 0 5px; color: var(--muted); font-size: 12px; }\n.palette-row label {\n  display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 44px;\n  background: var(--paper); color: var(--ink); border: 1px solid var(--muted); border-radius: 5px;\n  cursor: pointer; font: 600 14px var(--serif);\n}\n.palette-row input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }\n.palette-row label:has(:checked) { box-shadow: inset 0 0 0 1px var(--ink); }\n#settings { max-height: calc(100dvh - 28px); overflow-y: auto; }\n.gesture-hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }\n.setting label { display: flex; justify-content: space-between; }\nselect { width: 100%; padding: 8px; background: var(--paper); border: 1px solid var(--line); border-radius: 4px; }\ninput { width: 100%; accent-color: var(--accent); }\n@media (max-width: 760px), (max-height: 540px) and (pointer: coarse) {\n  .layout { grid-template-columns: 1fr; }\n  aside,#sidebar-toggle { display: none; }\n  header { min-height: 46px; gap: 8px; padding-inline: 12px; }\n  header .brand { font-size: 16px; padding-right: 9px; }\n  #reader-close { font-size: 13px; padding-inline: 4px; }\n  #contents-open { display: block; }\n  #contents-open,#settings-open { padding-inline: 6px; min-width: 44px; }\n  #settings-open b { display: none; }\n  article { padding: 32px 22px 40px; }\n  main { scrollbar-gutter: auto; }\n  footer { gap: 2px; padding-inline: max(4px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-right)); }\n  #steps { gap: 4px; }\n  .step { padding-inline: 8px; }\n  .progress { min-width: 42px; font-size: 12px; }\n  #progress-label { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }\n}\n@media(max-width: 350px) {\n  .step { padding-inline: 5px; }\n  #settings-open, #contents-open { font-size: 13px; }\n}\n\n/* In a paged or vertical layout the text area has two definite dimensions. */\n#reader { min-width: 0; min-height: 0; }\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) {\n  scrollbar-gutter: auto; overflow: hidden;\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article {\n  box-sizing: border-box; height: 100%; max-width: 53rem;\n  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr);\n  padding: clamp(12px, 3vh, 32px) clamp(18px, 4vw, 52px);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article:has(#chapter-status:not([hidden])) { grid-template-rows: auto auto auto auto minmax(0, 1fr); }\n#chapter-status { margin: 0 0 8px; color: var(--muted); font-size: 14px; }\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) h1 {\n  margin: 5px 0; font-size: clamp(23px, 3vw, 36px);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) .meta {\n  margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) .prose {\n  min-width: 0; min-height: 0; overflow: auto; padding: 0; border: 0; overflow-anchor: none;\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) #chapter-end { display: none; }\n#reader[data-writing=\"vertical\"] .prose { writing-mode: vertical-rl; text-orientation: mixed; }\n#reader .prose p { margin: 0; }\n#reader .prose p + p { margin-block-start: 1em; }\n#reader[data-mode=\"scroll\"][data-writing=\"horizontal\"] .prose { padding-top: calc(12px + 1em); }\n#reader[data-mode=\"scroll\"], #reader[data-mode=\"scroll\"][data-writing=\"vertical\"] .prose { overscroll-behavior: contain; }\n#reader[data-mode=\"paged\"] .prose { overflow: hidden; touch-action: pan-y pinch-zoom; }\n@media (max-height: 480px) {\n  #reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article {\n    grid-template-rows: auto minmax(0, 1fr); padding-block: 6px;\n  }\n  #reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) :is(.meta, .chapter-label) { display: none; }\n}\nhtml.native-scroll body { height: auto; min-height: 100dvh; display: block; }\n.native-scroll header { position: sticky; top: 0; z-index: 1; background: var(--paper); }\n.native-scroll #reader { overflow: visible; padding-bottom: 56px; }\n.native-scroll footer { position: fixed; inset: auto 0 0; z-index: 1; }\n.native-scroll aside { align-self: start; position: sticky; top: 56px; max-height: calc(100dvh - 112px); }\n</style>\n</head>\n<body>\n<header>\n  <button type=\"button\" id=\"sidebar-toggle\" class=\"tool\" aria-controls=\"chapter-sidebar\" aria-expanded=\"true\">收合章節欄</button>\n  <span class=\"brand\"><i class=\"brandmark\" aria-hidden=\"true\"></i>KomaGlide</span>\n  <span class=\"header-work\" id=\"header-work\"></span>\n  <button id=\"reader-close\" class=\"tool\" hidden>返回原站</button>\n</header>\n<div class=\"layout\" id=\"reader-layout\">\n  <aside id=\"chapter-sidebar\" aria-label=\"作品與目錄\">\n    <div class=\"cover\"><small id=\"work-source\"></small><strong id=\"work-title\">潮汐郵局</strong></div>\n    <div class=\"contents-title\"><h2>章節目錄</h2><small id=\"chapter-count\"></small></div>\n    <nav id=\"toc\" aria-label=\"章節目錄\"></nav>\n  </aside>\n  <main id=\"reader\" tabindex=\"0\" aria-labelledby=\"chapter-title\">\n    <article>\n      <div class=\"chapter-label\" id=\"number\"></div><h1 id=\"chapter-title\" tabindex=\"-1\"></h1>\n      <p class=\"meta\" id=\"meta\"></p><p id=\"chapter-status\" role=\"status\" hidden></p><div class=\"prose\" id=\"prose\"></div>\n      <div id=\"chapter-end\"></div>\n    </article>\n  </main>\n</div>\n<footer>\n  <button id=\"contents-open\" class=\"tool\" aria-haspopup=\"dialog\">目錄</button>\n  <nav id=\"steps\" aria-label=\"閱讀導覽\">\n    <button class=\"step\" id=\"previous\">上一章</button>\n    <div class=\"progress\"><span id=\"progress-label\">本章進度</span><span id=\"percent\">0%</span><progress id=\"bar\" max=\"100\" value=\"0\" aria-label=\"本章進度\"></progress></div>\n    <button class=\"step\" id=\"next\">下一章</button>\n  </nav>\n  <button id=\"settings-open\" class=\"tool\" aria-haspopup=\"dialog\"><b aria-hidden=\"true\">Aa</b>閱讀設定</button>\n</footer>\n<dialog id=\"contents\" aria-labelledby=\"contents-title\">\n  <div class=\"contents-controls\">\n    <div class=\"dialog-head\"><h2 id=\"contents-title\">章節目錄</h2><button id=\"contents-close\" aria-label=\"關閉目錄\" autofocus>×</button></div>\n    <input class=\"chapter-search\" id=\"chapter-search\" type=\"search\" aria-label=\"搜尋章名或章節序號\"\n      placeholder=\"搜尋章名或章節序號\" enterkeyhint=\"search\" autocomplete=\"off\">\n    <div class=\"contents-actions\">\n      <p id=\"chapter-results\" role=\"status\" aria-atomic=\"true\"></p>\n      <button id=\"locate-chapter\">目前章節</button>\n    </div>\n  </div>\n  <nav id=\"mobile-toc\" aria-label=\"章節清單\"></nav>\n</dialog>\n<dialog id=\"settings\" aria-labelledby=\"settings-title\">\n  <div class=\"dialog-head\"><h2 id=\"settings-title\">閱讀設定</h2><button aria-label=\"關閉設定\">×</button></div>\n  <div class=\"setting\"><label for=\"mode\">閱讀模式</label><select id=\"mode\" aria-describedby=\"gesture-hint\"><option value=\"scroll\">連續捲動</option><option value=\"paged\">逐頁翻閱</option></select><p class=\"gesture-hint\" id=\"gesture-hint\" hidden></p></div>\n  <div class=\"setting\"><label for=\"writing\">文字排列</label><select id=\"writing\"><option value=\"horizontal\">橫排（左起）</option><option value=\"vertical\">直排（右起）</option></select></div>\n  <div class=\"setting\"><label for=\"size\">字級<output id=\"size-output\" for=\"size\"></output></label><input type=\"range\" id=\"size\" min=\"16\" max=\"30\" step=\"1\" value=\"20\"></div>\n  <div class=\"setting\"><label for=\"leading\">行距</label><select id=\"leading\"><option value=\"1.65\">緊湊</option><option value=\"1.95\" selected>標準</option><option value=\"2.25\">寬鬆</option></select></div>\n  <fieldset class=\"palettes\"><legend>閱讀配色</legend>\n    <p class=\"palette-group\" id=\"light-label\">淺色</p>\n    <div class=\"palette-row\" role=\"group\" aria-labelledby=\"light-label\">\n      <label data-theme=\"paper\"><input type=\"radio\" name=\"theme\" value=\"paper\" checked>紙白</label>\n      <label data-theme=\"sepia\"><input type=\"radio\" name=\"theme\" value=\"sepia\">暖茶</label>\n      <label data-theme=\"sage\"><input type=\"radio\" name=\"theme\" value=\"sage\">鼠尾草</label>\n    </div>\n    <p class=\"palette-group\" id=\"dark-label\">深色</p>\n    <div class=\"palette-row\" role=\"group\" aria-labelledby=\"dark-label\">\n      <label data-theme=\"night\"><input type=\"radio\" name=\"theme\" value=\"night\">墨綠</label>\n      <label data-theme=\"navy\"><input type=\"radio\" name=\"theme\" value=\"navy\">午夜藍</label>\n      <label data-theme=\"black\"><input type=\"radio\" name=\"theme\" value=\"black\">純黑</label>\n    </div>\n  </fieldset>\n</dialog>\n\n\n</body>\n</html>\n", 'text/html');
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ios) {
+    const original = document.documentElement;
+    const scroll = [window.scrollX, window.scrollY];
+    const root = document.importNode(shell.documentElement, true);
+    original.replaceWith(root);
+    function dispose() {
+      if (request.signal.aborted) return;
+      request.abort();
+      root.replaceWith(original);
+      window.scrollTo(...scroll);
+    }
+    try {
+      mountNovelReader(document, window, {...source, nativeScroll: true, signal: request.signal,
+        close() { dispose(); onClose(); }});
+    } catch (error) {
+      dispose();
+      throw error;
+    }
+    return dispose;
+  }
+  const overlay = document.createElement('dialog');
+  overlay.setAttribute('aria-label', 'KomaGlide 小說閱讀器');
+  overlay.style.cssText = 'position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;border:0;padding:0;background:#fbfaf5;overflow:hidden';
+  const frame = document.createElement('iframe');
+  frame.title = 'KomaGlide 小說閱讀器';
+  frame.style.cssText = 'display:block;width:100%;height:100%;border:0';
+  overlay.append(frame);
+  document.body.append(overlay);
+  const restoreViewport = fitReaderViewport();
+  function dispose() {
+    if (request.signal.aborted) return;
+    request.abort();
+    overlay.remove();
+    void restoreViewport?.();
+  }
+  function close() {
+    if (request.signal.aborted) return;
+    dispose();
+    onClose();
+  }
+  overlay.addEventListener('close', close, {once:true});
+  try {
+    overlay.showModal();
+    const readerDocument = frame.contentDocument;
+    readerDocument.documentElement.replaceWith(readerDocument.importNode(shell.documentElement, true));
+    mountNovelReader(readerDocument, frame.contentWindow, {...source, close, signal:request.signal});
+    frame.contentWindow.focus();
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+  return dispose;
+}
+
+function openShelfNovel(chapter, related, close) {
+  const [site, workId, initialChapter] = chapter.key;
+  return showNovelReader({
+    chapters: related.map(item => ({id: item.key[2], title: item.chapterTitle, order: item.order})),
+    workTitle: chapter.workTitle,
+    siteName: site,
+    initialChapter,
+    storageKey: czbooksNovelStorageKey(workId),
+    offline: true,
+    closeLabel: t('backToLibrary'),
+    async loadChapter(item) {
+      const paragraphs = await readNovelChapter([site, workId, item.id]);
+      if (!paragraphs) throw new Error(t('chapterRemoved'));
+      return paragraphs;
+    },
+  }, new AbortController(), close);
+}
+
 function runCzbooksNovel() {
-  const book = detectCzbooks(document, new URL(location.href));
+  const book = detectCzbooks(document.documentElement, new URL(location.href));
   if (!book) return false;
   const launch = document.createElement('button');
   launch.type = 'button';
@@ -2645,41 +2873,20 @@ function runCzbooksNovel() {
     if (active) return;
     const request = new AbortController();
     active = request;
+    disposeSourceNovel = () => request.abort();
     launch.disabled = true;
     launch.textContent = '載入章節目錄…';
     try {
       const source = await book.open(request.signal);
-      const overlay = document.createElement('dialog');
-      overlay.setAttribute('aria-label', 'KomaGlide 小說閱讀器');
-      overlay.style.cssText = 'position:fixed;inset:0;margin:0;width:100%;height:100%;max-width:none;max-height:none;border:0;padding:0;background:#fbfaf5;overflow:hidden';
-      const frame = document.createElement('iframe');
-      frame.title = 'KomaGlide 小說閱讀器';
-      frame.style.cssText = 'display:block;width:100%;height:100%;border:0';
-      overlay.append(frame);
-      document.body.append(overlay);
-      const restoreViewport = fitReaderViewport();
-      const close = () => {
-        if (request.signal.aborted) return;
-        request.abort();
-        overlay.remove();
-        void restoreViewport?.();
+      if (request.signal.aborted) return;
+      disposeSourceNovel = showNovelReader(source, request, () => {
+        disposeSourceNovel = undefined;
         active = null;
         launch.disabled = false;
         launch.focus({preventScroll:true});
-      };
-      overlay.addEventListener('close', close, {once:true});
-      try {
-        overlay.showModal();
-        const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>潮汐郵局 · KomaGlide 小說閱讀器</title>\n<style>\n:root {\n  --serif: \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  --size: 20px; --leading: 1.95;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n}\n:root, [data-theme=\"paper\"] {\n  color-scheme: light;\n  --paper: #fbfaf5; --side: #f0f0e7; --ink: #252f2a; --muted: #58665c;\n  --line: #d3d7ca; --accent: #345d49; --wash: #dfe8d9; --stamp: #9a4837;\n}\n[data-theme=\"sepia\"] {\n  color-scheme: light; --paper: #f3e5cb; --side: #eaddc2; --ink: #483522; --muted: #70573e;\n  --line: #cdbca0; --accent: #77512f; --wash: #e8d6b9; --stamp: #86452f;\n}\n[data-theme=\"sage\"] {\n  color-scheme: light; --paper: #e4eddd; --side: #d9e4d2; --ink: #263a2b; --muted: #4e624f;\n  --line: #b6c8b3; --accent: #345c42; --wash: #cfdfc8; --stamp: #725038;\n}\n[data-theme=\"night\"] {\n  color-scheme: dark; --paper: #1c2421; --side: #202b25; --ink: #e6e8dd; --muted: #b0bcaf;\n  --line: #415046; --accent: #b2cdb6; --wash: #324639; --stamp: #ebaa91;\n}\n[data-theme=\"navy\"] {\n  color-scheme: dark; --paper: #172236; --side: #1c293e; --ink: #dce3f1; --muted: #adbbcf;\n  --line: #3b4e6a; --accent: #acc8ec; --wash: #2d4059; --stamp: #e9b599;\n}\n[data-theme=\"black\"] {\n  color-scheme: dark; --paper: #000000; --side: #101010; --ink: #dbdbdb; --muted: #a8a8a8;\n  --line: #424242; --accent: #d3d3d3; --wash: #292929; --stamp: #c9b7a3;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: var(--paper); color: var(--ink); }\nbutton, select, input { font: inherit; color: inherit; }\nbutton { cursor: pointer; border: 0; background: transparent; }\nbutton:disabled { opacity: .35; cursor: default; }\nbutton:hover:enabled { background: var(--wash); }\n:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }\nheader, footer { padding-inline: clamp(12px, 2.5vw, 40px); }\nheader { display: flex; align-items: center; gap: 14px; min-height: 56px; border-bottom: 1px solid var(--line); }\n.header-work { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 600 15px var(--serif); }\nheader .brand { padding-right: 14px; border-right: 1px solid var(--line); }\n#reader-close { color: var(--muted); white-space: nowrap; }\n#sidebar-toggle { color: var(--accent); background: var(--wash); }\n.brand { font: 750 21px/1 \"DM Sans\", system-ui, sans-serif; letter-spacing: -1px; }\n.brandmark { display: inline-grid; grid-template-columns: repeat(2, 7px); gap: 3px; transform: skewY(-12deg); margin-right: 9px; vertical-align: -1px; }\n.brandmark::before,.brandmark::after { content: \"\"; height: 16px; border-radius: 1px; background: var(--accent); }\n.brandmark::after { height: 13px; }\n.tool { min-height: 44px; padding: 6px 12px; border-radius: 6px; font-size: 14px; }\n.tool b { font: 600 18px Georgia, serif; margin-right: 6px; }\n#contents-open { display: none; }\n.layout { min-height: 0; display: grid; grid-template-columns: clamp(232px, 24vw, 316px) minmax(0, 1fr); }\n.layout[data-sidebar-collapsed] { grid-template-columns: minmax(0, 1fr); }\naside { padding: clamp(22px, 3vw, 42px); overflow: auto; background: var(--side); border-right: 1px solid var(--line); }\n.cover { position: relative; isolation: isolate; overflow: hidden; background: #365847; color: #faf4db; padding: 19px 21px; width: 100%; max-width: 242px; min-height: 144px; border-left: 6px double #a9b09a; }\n.cover::after { content: \"\"; position: absolute; z-index: -1; width: 230%; height: 235%; left: -23%; top: 40%; background: repeating-radial-gradient(ellipse, transparent 0 6px, #b4c4a261 7px 8px, transparent 9px 14px); transform: rotate(-16deg); }\n.cover small { font: 10px ui-monospace, monospace; letter-spacing: 2px; }\n.cover strong { display: block; font: 600 29px/1.6 var(--serif); letter-spacing: .12em; }\n.contents-title { display: flex; align-items: baseline; justify-content: space-between; margin: 34px 0 12px; }\n.contents-title h2 { margin: 0; font-size: 15px; }\n.contents-title small,.chapter-num { color: var(--muted); font: 12px ui-monospace, monospace; }\n.chapter-link { display: flex; align-items: baseline; width: 100%; text-align: left; gap: 14px; padding: 14px 10px; border-radius: 4px; font-size: 15px; }\n.chapter-link[hidden] { display: none; }\n.chapter-num { flex: none; font-variant-numeric: tabular-nums; }\n.chapter-name { min-width: 0; overflow-wrap: anywhere; }\n.chapter-link[aria-current] { color: var(--accent); background: var(--wash); font-weight: 700; box-shadow: inset 2px 0 var(--accent); }\nmain { overflow: auto; scrollbar-gutter: stable; }\narticle { margin: auto; max-width: 43rem; padding: clamp(34px, 5.5vw, 80px) clamp(22px, 3.5vw, 50px) 64px; box-sizing: content-box; }\n.chapter-label { display: flex; align-items: center; gap: 11px; color: var(--stamp); font-size: 13px; letter-spacing: .12em; }\n.chapter-label::before { content: \"\"; width: 29px; border-top: 1px solid; }\nh1 { font: 700 clamp(32px, 4vw, 54px)/1.35 var(--serif); letter-spacing: .045em; margin: 14px 0 8px; }\n.meta { font-size: 13px; color: var(--muted); margin: 0 0 29px; }\n.prose { border-top: 1px solid var(--line); padding-top: 12px; font: var(--size)/var(--leading) var(--serif); letter-spacing: .035em; overflow-wrap: anywhere; }\n.prose p { margin: 1em 0 0; }\n#chapter-end { margin: 38px 0 0; border-top: 1px solid var(--line); padding-top: 18px; text-align: right; }\n#chapter-end button,.step { padding: 8px 12px; border-radius: 6px; min-height: 44px; }\nfooter {\n  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;\n  padding-block: 4px max(4px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line);\n  background: var(--paper); font-size: 14px;\n}\n#contents-open { grid-column: 1; justify-self: start; }\n#steps { grid-column: 2; display: flex; gap: 10px; align-items: center; }\n#steps.reverse { flex-direction: row-reverse; }\n#settings-open { grid-column: 3; justify-self: end; }\n.step { color: var(--accent); background: var(--wash); white-space: nowrap; font-weight: 600; }\n.step:hover:enabled { box-shadow: inset 0 0 0 1px var(--accent); }\n.progress { min-width: 100px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }\n#progress-label { margin-right: 5px; font-size: 12px; }\nprogress { display: block; width: 100%; height: 3px; margin-top: 3px; accent-color: var(--accent); }\ndialog { background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; width: min(360px, calc(100% - 28px)); padding: 22px; box-shadow: 0 16px 60px #14251b25; }\ndialog::backdrop { background: #18241d45; }\n.dialog-head { display: flex; align-items: center; justify-content: space-between; }\n.dialog-head h2 { margin: 0; font-size: 20px; }\n.dialog-head button { font-size: 22px; width: 44px; height: 44px; }\n#contents[open] {\n  position: fixed; inset: 0; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none;\n  height: 100dvh; border: 0; border-radius: 0; padding: 0;\n  display: flex; flex-direction: column; overflow: hidden;\n}\n.contents-controls {\n  flex: none; border-bottom: 1px solid var(--line);\n  padding: max(8px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 6px max(16px, env(safe-area-inset-left));\n}\n.contents-controls .dialog-head { gap: 8px; margin-bottom: 8px; }\n.contents-controls h2 {\n  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;\n  overflow: hidden; overflow-wrap: anywhere; font-size: 17px; line-height: 1.35;\n}\n.contents-controls .dialog-head button { flex: none; }\n.chapter-search {\n  min-height: 44px; padding: 7px 10px; border: 1px solid var(--muted); border-radius: 5px;\n  background: var(--paper); font-size: 16px;\n}\n.contents-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\n.contents-actions p { color: var(--muted); font-size: 13px; margin: 0; }\n#locate-chapter { min-height: 44px; padding: 8px; border-radius: 5px; font-size: 14px; }\n#mobile-toc {\n  flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain;\n  padding: 6px max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));\n}\n#mobile-toc .chapter-link { min-height: 48px; line-height: 1.45; }\n#mobile-toc .chapter-link:focus-visible { outline-offset: -2px; }\n.setting { margin-top: 18px; display: grid; gap: 8px; font-size: 14px; }\n.palettes { margin: 18px 0 0; padding: 0; border: 0; }\n.palettes legend { padding: 0; font-size: 14px; }\n.palette-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }\n.palette-group { margin: 10px 0 5px; color: var(--muted); font-size: 12px; }\n.palette-row label {\n  display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 44px;\n  background: var(--paper); color: var(--ink); border: 1px solid var(--muted); border-radius: 5px;\n  cursor: pointer; font: 600 14px var(--serif);\n}\n.palette-row input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }\n.palette-row label:has(:checked) { box-shadow: inset 0 0 0 1px var(--ink); }\n#settings { max-height: calc(100dvh - 28px); overflow-y: auto; }\n.gesture-hint { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }\n.setting label { display: flex; justify-content: space-between; }\nselect { width: 100%; padding: 8px; background: var(--paper); border: 1px solid var(--line); border-radius: 4px; }\ninput { width: 100%; accent-color: var(--accent); }\n@media (max-width: 760px), (max-height: 540px) and (pointer: coarse) {\n  .layout { grid-template-columns: 1fr; }\n  aside,#sidebar-toggle { display: none; }\n  header { min-height: 46px; gap: 8px; padding-inline: 12px; }\n  header .brand { font-size: 16px; padding-right: 9px; }\n  #reader-close { font-size: 13px; padding-inline: 4px; }\n  #contents-open { display: block; }\n  #contents-open,#settings-open { padding-inline: 6px; min-width: 44px; }\n  #settings-open b { display: none; }\n  article { padding: 32px 22px 40px; }\n  main { scrollbar-gutter: auto; }\n  footer { gap: 2px; padding-inline: max(4px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-right)); }\n  #steps { gap: 4px; }\n  .step { padding-inline: 8px; }\n  .progress { min-width: 42px; font-size: 12px; }\n  #progress-label { position: absolute; clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }\n}\n@media(max-width: 350px) {\n  .step { padding-inline: 5px; }\n  #settings-open, #contents-open { font-size: 13px; }\n}\n\n/* In a paged or vertical layout the text area has two definite dimensions. */\n#reader { min-width: 0; min-height: 0; }\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) {\n  scrollbar-gutter: auto; overflow: hidden;\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article {\n  box-sizing: border-box; height: 100%; max-width: 53rem;\n  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr);\n  padding: clamp(12px, 3vh, 32px) clamp(18px, 4vw, 52px);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article:has(#chapter-status:not([hidden])) { grid-template-rows: auto auto auto auto minmax(0, 1fr); }\n#chapter-status { margin: 0 0 8px; color: var(--muted); font-size: 14px; }\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) h1 {\n  margin: 5px 0; font-size: clamp(23px, 3vw, 36px);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) .meta {\n  margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line);\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) .prose {\n  min-width: 0; min-height: 0; overflow: auto; padding: 0; border: 0; overflow-anchor: none;\n}\n#reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) #chapter-end { display: none; }\n#reader[data-writing=\"vertical\"] .prose { writing-mode: vertical-rl; text-orientation: mixed; }\n#reader .prose p { margin: 0; }\n#reader .prose p + p { margin-block-start: 1em; }\n#reader[data-mode=\"scroll\"][data-writing=\"horizontal\"] .prose { padding-top: calc(12px + 1em); }\n#reader[data-mode=\"paged\"] .prose { overflow: hidden; touch-action: pan-y pinch-zoom; }\n@media (max-height: 480px) {\n  #reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) article {\n    grid-template-rows: auto minmax(0, 1fr); padding-block: 6px;\n  }\n  #reader:is([data-mode=\"paged\"], [data-writing=\"vertical\"]) :is(.meta, .chapter-label) { display: none; }\n}\n</style>\n</head>\n<body>\n<header>\n  <button type=\"button\" id=\"sidebar-toggle\" class=\"tool\" aria-controls=\"chapter-sidebar\" aria-expanded=\"true\">收合章節欄</button>\n  <span class=\"brand\"><i class=\"brandmark\" aria-hidden=\"true\"></i>KomaGlide</span>\n  <span class=\"header-work\" id=\"header-work\"></span>\n  <button id=\"reader-close\" class=\"tool\" hidden>返回原站</button>\n</header>\n<div class=\"layout\" id=\"reader-layout\">\n  <aside id=\"chapter-sidebar\" aria-label=\"作品與目錄\">\n    <div class=\"cover\"><small id=\"work-source\"></small><strong id=\"work-title\">潮汐郵局</strong></div>\n    <div class=\"contents-title\"><h2>章節目錄</h2><small id=\"chapter-count\"></small></div>\n    <nav id=\"toc\" aria-label=\"章節目錄\"></nav>\n  </aside>\n  <main id=\"reader\" tabindex=\"0\" aria-labelledby=\"chapter-title\">\n    <article>\n      <div class=\"chapter-label\" id=\"number\"></div><h1 id=\"chapter-title\" tabindex=\"-1\"></h1>\n      <p class=\"meta\" id=\"meta\"></p><p id=\"chapter-status\" role=\"status\" hidden></p><div class=\"prose\" id=\"prose\"></div>\n      <div id=\"chapter-end\"></div>\n    </article>\n  </main>\n</div>\n<footer>\n  <button id=\"contents-open\" class=\"tool\" aria-haspopup=\"dialog\">目錄</button>\n  <nav id=\"steps\" aria-label=\"閱讀導覽\">\n    <button class=\"step\" id=\"previous\">上一章</button>\n    <div class=\"progress\"><span id=\"progress-label\">本章進度</span><span id=\"percent\">0%</span><progress id=\"bar\" max=\"100\" value=\"0\" aria-label=\"本章進度\"></progress></div>\n    <button class=\"step\" id=\"next\">下一章</button>\n  </nav>\n  <button id=\"settings-open\" class=\"tool\" aria-haspopup=\"dialog\"><b aria-hidden=\"true\">Aa</b>閱讀設定</button>\n</footer>\n<dialog id=\"contents\" aria-labelledby=\"contents-title\">\n  <div class=\"contents-controls\">\n    <div class=\"dialog-head\"><h2 id=\"contents-title\">章節目錄</h2><button id=\"contents-close\" aria-label=\"關閉目錄\" autofocus>×</button></div>\n    <input class=\"chapter-search\" id=\"chapter-search\" type=\"search\" aria-label=\"搜尋章名或章節序號\"\n      placeholder=\"搜尋章名或章節序號\" enterkeyhint=\"search\" autocomplete=\"off\">\n    <div class=\"contents-actions\">\n      <p id=\"chapter-results\" role=\"status\" aria-atomic=\"true\"></p>\n      <button id=\"locate-chapter\">目前章節</button>\n    </div>\n  </div>\n  <nav id=\"mobile-toc\" aria-label=\"章節清單\"></nav>\n</dialog>\n<dialog id=\"settings\" aria-labelledby=\"settings-title\">\n  <div class=\"dialog-head\"><h2 id=\"settings-title\">閱讀設定</h2><button aria-label=\"關閉設定\">×</button></div>\n  <div class=\"setting\"><label for=\"mode\">閱讀模式</label><select id=\"mode\" aria-describedby=\"gesture-hint\"><option value=\"scroll\">連續捲動</option><option value=\"paged\">逐頁翻閱</option></select><p class=\"gesture-hint\" id=\"gesture-hint\" hidden></p></div>\n  <div class=\"setting\"><label for=\"writing\">文字排列</label><select id=\"writing\"><option value=\"horizontal\">橫排（左起）</option><option value=\"vertical\">直排（右起）</option></select></div>\n  <div class=\"setting\"><label for=\"size\">字級<output id=\"size-output\" for=\"size\"></output></label><input type=\"range\" id=\"size\" min=\"16\" max=\"30\" step=\"1\" value=\"20\"></div>\n  <div class=\"setting\"><label for=\"leading\">行距</label><select id=\"leading\"><option value=\"1.65\">緊湊</option><option value=\"1.95\" selected>標準</option><option value=\"2.25\">寬鬆</option></select></div>\n  <fieldset class=\"palettes\"><legend>閱讀配色</legend>\n    <p class=\"palette-group\" id=\"light-label\">淺色</p>\n    <div class=\"palette-row\" role=\"group\" aria-labelledby=\"light-label\">\n      <label data-theme=\"paper\"><input type=\"radio\" name=\"theme\" value=\"paper\" checked>紙白</label>\n      <label data-theme=\"sepia\"><input type=\"radio\" name=\"theme\" value=\"sepia\">暖茶</label>\n      <label data-theme=\"sage\"><input type=\"radio\" name=\"theme\" value=\"sage\">鼠尾草</label>\n    </div>\n    <p class=\"palette-group\" id=\"dark-label\">深色</p>\n    <div class=\"palette-row\" role=\"group\" aria-labelledby=\"dark-label\">\n      <label data-theme=\"night\"><input type=\"radio\" name=\"theme\" value=\"night\">墨綠</label>\n      <label data-theme=\"navy\"><input type=\"radio\" name=\"theme\" value=\"navy\">午夜藍</label>\n      <label data-theme=\"black\"><input type=\"radio\" name=\"theme\" value=\"black\">純黑</label>\n    </div>\n  </fieldset>\n</dialog>\n\n\n</body>\n</html>\n", 'text/html');
-        const readerDocument = frame.contentDocument;
-        readerDocument.documentElement.replaceWith(readerDocument.importNode(shell.documentElement, true));
-        mountNovelReader(readerDocument, frame.contentWindow, {...source, close, signal:request.signal});
-        frame.contentWindow.focus();
-      } catch (error) {
-        close();
-        throw error;
-      }
+      });
     } catch (error) {
+      disposeSourceNovel = undefined;
       active = null;
       launch.disabled = false;
       console.warn('[KomaGlide]', error.message);

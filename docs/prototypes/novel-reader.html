@@ -192,6 +192,7 @@ input { width: 100%; accent-color: var(--accent); }
 #reader .prose p { margin: 0; }
 #reader .prose p + p { margin-block-start: 1em; }
 #reader[data-mode="scroll"][data-writing="horizontal"] .prose { padding-top: calc(12px + 1em); }
+#reader[data-mode="scroll"], #reader[data-mode="scroll"][data-writing="vertical"] .prose { overscroll-behavior: contain; }
 #reader[data-mode="paged"] .prose { overflow: hidden; touch-action: pan-y pinch-zoom; }
 @media (max-height: 480px) {
   #reader:is([data-mode="paged"], [data-writing="vertical"]) article {
@@ -199,6 +200,11 @@ input { width: 100%; accent-color: var(--accent); }
   }
   #reader:is([data-mode="paged"], [data-writing="vertical"]) :is(.meta, .chapter-label) { display: none; }
 }
+html.native-scroll body { height: auto; min-height: 100dvh; display: block; }
+.native-scroll header { position: sticky; top: 0; z-index: 1; background: var(--paper); }
+.native-scroll #reader { overflow: visible; padding-bottom: 56px; }
+.native-scroll footer { position: fixed; inset: auto 0 0; z-index: 1; }
+.native-scroll aside { align-self: start; position: sticky; top: 56px; max-height: calc(100dvh - 112px); }
 </style>
 </head>
 <body>
@@ -267,7 +273,7 @@ input { width: 100%; accent-color: var(--accent); }
 <script>
 function mountNovelReader(document, window, source) {
   'use strict';
-  const {chapters, workTitle, loadChapter, initialChapter, close, signal} = source;
+  const {chapters, workTitle, loadChapter, initialChapter, close, signal, offline} = source;
   const storageKey = source.storageKey;
   const $ = id => document.getElementById(id);
   const reader = $('reader');
@@ -281,15 +287,30 @@ function mountNovelReader(document, window, source) {
   $('work-source').textContent = source.siteName;
   $('work-title').textContent = workTitle;
   $('header-work').textContent = workTitle;
-  $('chapter-count').textContent = '全 ' + chapters.length + ' 章';
+  const chapterCount = (offline ? '已存 ' : '全 ') + chapters.length + ' 章';
+  $('chapter-count').textContent = chapterCount;
   $('contents-title').textContent = workTitle + ' · 目錄';
   if (close) {
     $('reader-close').hidden = false;
+    if (source.closeLabel) $('reader-close').textContent = source.closeLabel;
     $('reader-close').onclick = close;
   }
   let saved;
   try { saved = JSON.parse(window.localStorage.getItem(key)); } catch { /* Private browsing can disable storage. */ }
   const state = saved && typeof saved === 'object' ? saved : {};
+  const chapterProgressKey = id => key + '.progress.' + encodeURIComponent(id);
+  function savedPosition(id) {
+    if (state.chapter === id && state.anchor) return state.anchor;
+    try { return JSON.parse(window.localStorage.getItem(chapterProgressKey(id))); }
+    catch { return null; }
+  }
+  // Preserve the previous single-chapter bookmark when opening another chapter after an update.
+  if (typeof state.chapter === 'string' && state.anchor) {
+    try {
+      const oldKey = chapterProgressKey(state.chapter);
+      if (window.localStorage.getItem(oldKey) === null) window.localStorage.setItem(oldKey, JSON.stringify(state.anchor));
+    } catch { /* Storage can be unavailable. */ }
+  }
   const initial = chapters.findIndex(chapter => chapter.id === state.chapter);
   const entry = chapters.findIndex(chapter => chapter.id === initialChapter);
   let current = -1;
@@ -300,7 +321,10 @@ function mountNovelReader(document, window, source) {
   const prose = $('prose');
   const paged = () => reader.dataset.mode === 'paged';
   const vertical = () => reader.dataset.writing === 'vertical';
-  const scroller = () => vertical() ? prose : reader;
+  const nativeScroll = () => source.nativeScroll && !vertical() && !paged();
+  const scroller = () => nativeScroll() ? document.scrollingElement : vertical() ? prose : reader;
+  const readingEdge = () => nativeScroll() ? document.querySelector('header').getBoundingClientRect().bottom :
+    blockStart(scroller().getBoundingClientRect());
   let pages = [], pageIndex = 0;
   // Keep a logical text offset even if changing the layout moves it into the middle of a page.
   let readingAnchor = {paragraph: 0, offset: 0};
@@ -372,7 +396,7 @@ function mountNovelReader(document, window, source) {
   }
   function position() {
     if (paged()) return readingAnchor;
-    const edge = blockStart(scroller().getBoundingClientRect());
+    const edge = readingEdge();
     const nodes = [...prose.children];
     const index = nodes.findIndex(p => {
       const rect = p.getBoundingClientRect();
@@ -396,6 +420,7 @@ function mountNovelReader(document, window, source) {
     const offset = anchor?.offset ?? Math.round((anchor?.fraction || 0) * paragraphs[index].length);
     readingAnchor = atStart(index, Math.max(0, Math.min(paragraphs[index].length - 1, offset)));
     reader.scrollTop = 0;
+    if (nativeScroll()) window.scrollTo(0, 0);
     if (paged()) {
       paginate();
       const target = lastPage ? pages.length - 1 : pageFor(readingAnchor);
@@ -405,10 +430,10 @@ function mountNovelReader(document, window, source) {
       prose.replaceChildren(...paragraphs.map(paragraphNode));
       prose.scrollLeft = prose.scrollTop = 0;
       if (index || readingAnchor.offset) {
-        const edge = blockStart(scroller().getBoundingClientRect());
+        const edge = readingEdge();
         const distance = blockStart(charRect(prose.children[index], readingAnchor.offset)) - edge;
         if (vertical()) prose.scrollLeft -= distance;
-        else reader.scrollTop += distance;
+        else scroller().scrollTop += distance;
       }
       updateProgress();
     }
@@ -426,6 +451,10 @@ function mountNovelReader(document, window, source) {
     const last = !paged() || pageIndex === pages.length - 1;
     $('previous').textContent = first ? '上一章' : '上一頁';
     $('next').textContent = last ? '下一章' : '下一頁';
+    if (offline) {
+      $('previous').setAttribute('aria-label', first ? '上一章（已存）' : '上一頁');
+      $('next').setAttribute('aria-label', last ? '下一章（已存）' : '下一頁');
+    }
     $('previous').disabled = first && current === 0;
     $('next').disabled = last && current === chapters.length - 1;
     $('steps').classList.toggle('reverse', paged() && vertical());
@@ -435,10 +464,13 @@ function mountNovelReader(document, window, source) {
     state.chapter = chapters[current].id;
     const {paragraph, offset} = position();
     state.anchor = {paragraph, offset};
+    try { window.localStorage.setItem(chapterProgressKey(state.chapter), JSON.stringify(state.anchor)); }
+    catch { /* The work bookmark is also stored with the reading preferences. */ }
     persist();
   }
   async function selectChapter(index, lastPage = false, anchor = null) {
     if (loading || index < 0 || index >= chapters.length) return;
+    if (current >= 0 && current !== index) remember();
     if (contents.open) contents.close();
     if (current !== index || !prose.children.length) {
       const chapter = chapters[index];
@@ -451,7 +483,8 @@ function mountNovelReader(document, window, source) {
         try {
           chapter.paragraphs = await loadChapter(chapter, signal);
         } catch {
-          if (!signal?.aborted) status.textContent = '無法載入章節，請從目錄重試或返回原站。';
+          if (!signal?.aborted) status.textContent = offline
+            ? '無法開啟已存章節，請返回書庫。' : '無法載入章節，請從目錄重試或返回原站。';
           return;
         } finally {
           loading = false;
@@ -468,21 +501,22 @@ function mountNovelReader(document, window, source) {
   }
   function render(anchor, lastPage = false) {
     const chapter = chapters[current];
-    $('number').textContent = '第 ' + (current + 1) + ' 章';
+    $('number').textContent = '第 ' + (chapter.order ?? current + 1) + ' 章';
     $('chapter-title').textContent = chapter.title;
     document.title = chapter.title + ' · ' + workTitle + ' · KomaGlide';
     const length = chapter.paragraphs.join('').replace(/[\p{P}\s]/gu, '').length;
-    $('meta').textContent = workTitle + '　／　' + length + ' 字';
+    $('meta').textContent = workTitle + '　／　' + length + ' 字' +
+      (chapter.cacheFailed ? '　／　' + source.cacheFailure : '');
     locateChapter.disabled = false;
     for (const link of document.querySelectorAll('.chapter-link')) {
       if (Number(link.dataset.index) === current) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     }
     const end = $('chapter-end');
-    if (current === chapters.length - 1) end.textContent = '全書完';
+    if (current === chapters.length - 1) end.textContent = offline ? '這是最後一個已存章節' : '全書完';
     else {
       const next = document.createElement('button');
-      next.textContent = '下一章　' + chapters[current + 1].title + '　→';
+      next.textContent = (offline ? '下一個已存章節' : '下一章') + '　' + chapters[current + 1].title + '　→';
       next.onclick = () => selectChapter(current + 1);
       end.replaceChildren(next);
     }
@@ -495,12 +529,12 @@ function mountNovelReader(document, window, source) {
       button.dataset.index = index;
       const num = document.createElement('span');
       num.className = 'chapter-num';
-      num.textContent = String(index + 1).padStart(2, '0');
+      num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
       const name = document.createElement('span');
       name.className = 'chapter-name';
       name.textContent = chapter.title;
       button.append(num, name);
-      button.onclick = () => selectChapter(index);
+      button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
       nav.append(button);
     });
   }
@@ -511,12 +545,12 @@ function mountNovelReader(document, window, source) {
     const ordinal = /^\d+$/.test(query) ? Number(query) : null;
     let matches = 0;
     chapterRows.forEach((row, index) => {
-      const match = ordinal === null ? chapterTitles[index].includes(query) : index + 1 === ordinal;
+      const match = ordinal === null ? chapterTitles[index].includes(query) : (chapters[index].order ?? index + 1) === ordinal;
       row.hidden = !match;
       if (match) matches++;
     });
     $('chapter-results').textContent = matches === 0 ? '找不到符合的章節' :
-      query ? '找到 ' + matches + ' 章' : '全 ' + matches + ' 章';
+      query ? '找到 ' + matches + ' 章' : chapterCount;
     mobileToc.scrollTop = 0;
   }
   function showCurrentChapter() {
@@ -578,7 +612,7 @@ function mountNovelReader(document, window, source) {
   }
   $('previous').onclick = () => step(-1);
   $('next').onclick = () => step(1);
-  document.addEventListener('keydown', event => {
+  document.documentElement.addEventListener('keydown', event => {
     if (event.key === 'Escape' && close && !document.querySelector('dialog[open]')) {
       event.preventDefault();
       close();
@@ -601,30 +635,47 @@ function mountNovelReader(document, window, source) {
   function clearGesture() { gesture = null; }
   function readingZoomed() { return (window.visualViewport?.scale ?? 1) > 1.01; }
   function hasSelection() { return Boolean(window.getSelection()?.toString()); }
-  document.addEventListener('touchstart', event => {
+  document.documentElement.addEventListener('touchstart', event => {
     if (event.touches.length > 1) clearGesture();
   }, {capture:true, passive:true});
-  prose.addEventListener('touchstart', event => {
+  function atChapterEnd() {
+    const area = scroller();
+    const remaining = vertical() ? area.scrollWidth - area.clientWidth - Math.abs(area.scrollLeft) :
+      area.scrollHeight - area.clientHeight - area.scrollTop;
+    return remaining <= 2;
+  }
+  reader.addEventListener('touchstart', event => {
     clearGesture();
-    if (!paged() || event.touches.length !== 1 || readingZoomed() || hasSelection()) return;
+    if (event.touches.length !== 1 || readingZoomed() || hasSelection() || loading || current < 0) return;
+    if (paged() ? !prose.contains(event.target) : event.target.closest('button,a,input,select')) return;
+    if (!paged() && (current + 1 >= chapters.length || !atChapterEnd())) return;
     const touch = event.touches[0];
-    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false};
+    gesture = {id: touch.identifier, x: touch.clientX, y: touch.clientY, time: event.timeStamp, moved: false, chapter: current, paged: paged(), vertical: vertical()};
   }, {passive:true});
-  prose.addEventListener('touchmove', event => {
+  reader.addEventListener('touchmove', event => {
     if (!gesture) return;
     const touch = event.touches[0];
     if (!touch || event.touches.length !== 1 || touch.identifier !== gesture.id) return clearGesture();
     if (Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > 12) gesture.moved = true;
   }, {passive:true});
-  prose.addEventListener('contextmenu', clearGesture);
-  prose.addEventListener('touchcancel', clearGesture, {passive:true});
-  prose.addEventListener('touchend', event => {
+  reader.addEventListener('contextmenu', clearGesture);
+  reader.addEventListener('touchcancel', clearGesture, {passive:true});
+  reader.addEventListener('touchend', event => {
     const start = gesture;
     clearGesture();
-    if (!start || event.touches.length || !paged() || readingZoomed() || hasSelection()) return;
+    if (!start || event.touches.length || start.chapter !== current || start.paged !== paged() ||
+        start.vertical !== vertical() || readingZoomed() || hasSelection()) return;
     const touch = event.changedTouches[0];
     if (touch.identifier !== start.id) return;
     const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
+    if (!paged()) {
+      const distance = vertical() ? dx : -dy;
+      const across = vertical() ? dy : dx;
+      const duration = event.timeStamp - start.time;
+      if (atChapterEnd() && distance >= 64 && distance > Math.abs(across) * 1.5 &&
+          distance >= duration * 0.3) step(1);
+      return;
+    }
     const forward = vertical() ? -1 : 1;
     if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       step(-Math.sign(dx) * forward);
@@ -642,8 +693,11 @@ function mountNovelReader(document, window, source) {
     root.style.setProperty('--leading', $('leading').value);
     reader.dataset.mode = $('mode').value;
     reader.dataset.writing = $('writing').value;
-    $('gesture-hint').hidden = !paged();
-    $('gesture-hint').textContent = vertical() ? '點正文左側或向右滑可翻到下一頁；點右側或向左滑可往回翻。' :
+    document.documentElement.classList.toggle('native-scroll', Boolean(nativeScroll()));
+    $('gesture-hint').hidden = false;
+    $('gesture-hint').textContent = !paged()
+      ? (vertical() ? '讀到章末後，再用力向右滑一次可進入下一章。' : '滑到章末後，再用力向上滑一次可進入下一章。')
+      : vertical() ? '點正文左側或向右滑可翻到下一頁；點右側或向左滑可往回翻。' :
       '點正文右側或向左滑可翻到下一頁；點左側或向右滑可往回翻。';
     $('size-output').value = $('size').value + ' px';
   }
@@ -668,15 +722,17 @@ function mountNovelReader(document, window, source) {
   }
   applySettings();
   const startIndex = entry >= 0 ? entry : Math.max(0, initial);
-  void selectChapter(startIndex, false, startIndex === initial ? state.anchor : null);
+  void selectChapter(startIndex, false, savedPosition(chapters[startIndex].id));
   let saveTimer;
-  for (const area of [reader, prose]) {
+  for (const area of (source.nativeScroll ? [reader, prose, document] : [reader, prose])) {
     area.addEventListener('scroll', () => {
-      if (current < 0 || paged() || area !== scroller()) return;
+      if (current < 0 || paged() || (area === document ? !nativeScroll() : area !== scroller())) return;
       updateProgress();
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(remember, 150);
-    }, {passive:true});
+      if (!saveTimer) saveTimer = setTimeout(() => {
+        saveTimer = undefined;
+        remember();
+      }, 150);
+    }, {passive:true, signal});
   }
   const resizeObserver = new window.ResizeObserver(() => {
     if (current < 0) return;
@@ -685,7 +741,10 @@ function mountNovelReader(document, window, source) {
   });
   resizeObserver.observe(reader);
   document.fonts.ready.then(() => { if (!signal?.aborted && current >= 0 && paged()) layout(readingAnchor); });
-  window.addEventListener('pagehide', remember);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') remember();
+  }, {signal});
+  window.addEventListener('pagehide', remember, {signal});
   signal?.addEventListener('abort', () => {
     remember();
     resizeObserver.disconnect();

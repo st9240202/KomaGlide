@@ -3,7 +3,7 @@ import { shelf, readChapter, readExportChapters, readerBlob, setFavorite, setLim
 import { makeReaderThumbnail, mountReaderControls, watchReaderTheme } from './reader-controls.js';
 import { makeComicZip, validateComicZip } from './comic-zip.js';
 
-export function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage }) {
+export function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, openNovel }) {
   localizeDocument();
   const $ = id => document.getElementById(id);
   const languagePicker = $('library-language');
@@ -31,6 +31,8 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   let version = 0;
   let refreshTimer;
   let disposePages = () => {};
+  let disposeNovel;
+  let shelfHash = routePrefix + 'shelf';
   let pageAtViewport = () => 1;
   let activeKey;
   let retentionCheck = 0;
@@ -196,12 +198,14 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   }
 
   function countText(chapter) {
+    if (chapter.kind === 'novel') return t('novelSaved');
     return t(chapter.total ? 'savedKnownTotal' : 'savedUnknownTotal', {count: chapter.count, total: chapter.total});
   }
 
-  function favoriteButton(key, enabled) {
+  function favoriteButton(key, enabled, novel = false) {
     const label = key.length === 3
-      ? t(enabled ? 'favoritedChapter' : 'favoriteChapter')
+      ? t(novel ? (enabled ? 'favoritedNovelChapter' : 'favoriteNovelChapter') :
+        (enabled ? 'favoritedChapter' : 'favoriteChapter'))
       : t(enabled ? 'favoritedWork' : 'favoriteWork');
     const button = el('button', label, 'favorite');
     button.type = 'button';
@@ -348,6 +352,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     const protectedWorks = new Set(data.favorites.map(key => JSON.stringify(key)));
     const groups = new Map();
     for (const chapter of data.chapters) {
+      if (exporting && chapter.kind === 'novel') continue;
       const workKey = chapter.key.slice(0, 2);
       const workStar = chapter.workKnown && protectedWorks.has(JSON.stringify(workKey));
       if (starred && !workStar && !chapter.favorite) continue;
@@ -365,14 +370,16 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       const head = el('div', null, 'work-head');
       const names = el('div');
       const count = group.chapters.length;
+      const novel = recent.kind === 'novel';
+      const saved = novel ? t('novelChapterCount', {count}) : t(count === 1 ? 'chapterCountOne' : 'chapterCount', {count});
       names.append(el('h2', recent.workKnown ? recent.workTitle : t('ungrouped')),
-        el('span', recent.key[0] + ' · ' + t(count === 1 ? 'chapterCountOne' : 'chapterCount', {count}), 'source'));
+        el('span', recent.key[0] + ' · ' + saved, 'source'));
       head.append(names);
       if (!exporting && recent.workKnown) head.append(favoriteButton(workKey, workStar));
       article.append(head);
       for (const chapter of group.chapters.sort(chaptersInOrder)) {
         const row = el('div', null, 'chapter-row');
-        const action = exporting ? el('input') : favoriteButton(chapter.key, chapter.favorite);
+        const action = exporting ? el('input') : favoriteButton(chapter.key, chapter.favorite, novel);
         if (exporting) {
           action.type = 'checkbox';
           action.id = 'kg-export-' + chapter.key.map(encodeURIComponent).join('/');
@@ -387,9 +394,8 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     }
     if (!groups.size) {
       const empty = el('div', null, 'empty');
-      empty.append(el('h2', starred ? t('noFavorites') : t('noComics')),
-        el('p', starred ? t('favoritesHint') :
-          t('emptyShelfHint')));
+      empty.append(el('h2', starred ? t('noFavorites') : t(exporting ? 'noComics' : 'emptyLibrary')));
+      if (!exporting) empty.append(el('p', t(starred ? 'favoritesHint' : 'emptyShelfHint')));
       frag.append(empty);
     }
     const books = $('books');
@@ -575,6 +581,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   }
 
   async function render(reset = false) {
+    if (disposeNovel && !reset) return;
     const token = ++version;
     const hash = location.hash.slice(routePrefix.length);
     const reading = hash.startsWith('read/');
@@ -582,8 +589,10 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     const starred = hash === 'favorites';
     const exporting = hash === 'export';
     if (reset) {
+      disposeNovel?.();
       notify();
       disposePages();
+      disposeNovel = undefined;
       if (exporting !== !$('export-tools').hidden) $('books').replaceChildren();
       clearPreparedZip();
       selectedChapters.clear();
@@ -611,6 +620,16 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
         const { chapter, indices } = result;
         const data = await shelf();
         if (version !== token) return;
+        if (chapter.kind === 'novel' && openNovel) {
+          const related = data.chapters.filter(item => item.kind === 'novel' &&
+            item.key[0] === key[0] && item.key[1] === key[1]).sort(chaptersInOrder);
+          if (!related.some(item => item.key[2] === key[2])) throw new Error(t('chapterRemoved'));
+          $('reader').hidden = true;
+          disposeNovel = openNovel(chapter, related, () => { location.hash = shelfHash; });
+          document.title = chapter.chapterTitle + ' · KomaGlide';
+          return;
+        }
+        if (!indices) throw new Error(t('chapterNotFound'));
         const current = reset ? 1 : pageAtViewport();
         disposePages();
         activeKey = key;
@@ -633,6 +652,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
         if (reset) $('limit').value = String(limit / MiB);
         if (reset) void checkStorageProtection();
       } else {
+        if (!exporting) shelfHash = location.hash || routePrefix + 'shelf';
         $('usage').textContent = size(used) + ' / ' + size(limit);
         for (const [id, active] of [['all-tab', !starred && !exporting], ['star-tab', starred], ['export-tab', exporting]]) {
           if (active) $(id).setAttribute('aria-current', 'page');
@@ -670,6 +690,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   };
 
   changes.addEventListener('change', ({ detail }) => {
+    if (disposeNovel) return;
     if (detail.kind === 'error') {
       notify(detail.message);
       return;
