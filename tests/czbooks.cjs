@@ -117,6 +117,22 @@ async function run(ios) {
     await page.waitForFunction(() => window.shelfUrl?.endsWith('#komaglide/shelf'));
     assert.equal(await page.evaluate(() => window.shelfUrl), catalog + '#komaglide/shelf');
 
+    const other = await context.newPage();
+    const otherSite = 'https://unrelated.example/';
+    await other.route(otherSite, route => route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Other site</title>'}));
+    await other.goto(otherSite);
+    await other.exposeFunction('sharedValue', (key, fallback) =>
+      page.evaluate(([key, fallback]) => GM.getValue(key, fallback), [key, fallback]));
+    await other.evaluate(() => { GM.getValue = window.sharedValue; });
+    await other.waitForFunction(() => window.commands.has('小說書庫'));
+    await other.evaluate(() => window.commands.get('小說書庫')());
+    const novelShelf = await other.evaluate(() => window.shelfUrl);
+    assert.equal(novelShelf, catalog + '#komaglide/novels');
+    await other.goto(novelShelf);
+    await other.getByRole('heading', {name: '小說書庫', exact: true}).waitFor();
+    await other.getByText('小說狂人 · 已存 2 章').waitFor();
+    await other.close();
+
     await page.reload();
     await context.setOffline(true);
     await page.evaluate(() => window.commands.get('開啟 KomaGlide 書庫')());

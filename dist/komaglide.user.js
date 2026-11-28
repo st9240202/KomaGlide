@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.37
+// @version      0.7.39
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  閱讀漫畫與小說、保存漫畫圖片，並從腳本選單開啟本站書庫。
@@ -35,6 +35,9 @@
 // 開發用範本。安裝到腳本管理器時請選 dist/komaglide.user.js。
 (() => {
   'use strict';
+
+  if (window.top !== window.self || document.komaGlideShelfActive ||
+      document.documentElement?.matches('[data-komaglide-opening],[data-komaglide-shelf]')) return;
 
   const PREFIX = 'kg1.';
   const SHELF_HASH = '#komaglide/';
@@ -152,6 +155,7 @@ const translations = {
   connecting: ['正在接續…', 'Loading next section…', '続きのページを読み込み中…', '正在接续…'],
   autoContinue: ['自動接下一話', 'Continue Automatically', '自動で次の話へ', '自动接下一话'],
   closeReader: ['關閉閱讀器', 'Close Reader', 'リーダーを閉じる', '关闭阅读器'],
+  novelShelf: ['小說書庫', 'Novel Library', '小説の本棚', '小说书库'],
   openSiteLibrary: ['開啟本站書庫', 'Open Site Library', 'このサイトの本棚を開く', '打开本站书库'],
   openKomaGlideLibrary: ['開啟 KomaGlide 書庫', 'Open KomaGlide Library', 'KomaGlide の本棚を開く', '打开 KomaGlide 书库'],
   verticalReader: ['直向閱讀器', 'Vertical Reader', '縦読みリーダー', '纵向阅读器'],
@@ -1104,11 +1108,11 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     }
   };
 
-  function showBooks(data, starred, exporting) {
+  function showBooks(data, starred, exporting, novels) {
     const protectedWorks = new Set(data.favorites.map(key => JSON.stringify(key)));
     const groups = new Map();
     for (const chapter of data.chapters) {
-      if (exporting && chapter.kind === 'novel') continue;
+      if (exporting && chapter.kind === 'novel' || novels && chapter.kind !== 'novel') continue;
       const workKey = chapter.key.slice(0, 2);
       const workStar = chapter.workKnown && protectedWorks.has(JSON.stringify(workKey));
       if (starred && !workStar && !chapter.favorite) continue;
@@ -1342,6 +1346,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     const hash = location.hash.slice(routePrefix.length);
     const reading = hash.startsWith('read/');
     const storage = hash === 'storage';
+    const novels = hash === 'novels';
     const starred = hash === 'favorites';
     const exporting = hash === 'export';
     if (reset) {
@@ -1402,19 +1407,24 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
       const data = await shelf();
       if (version !== token) return;
       const { used, limit } = data.state;
-      document.title = (storage ? t('storageSettings') : t('library')) + ' · KomaGlide';
+      document.title = (storage ? t('storageSettings') : t(novels ? 'novelShelf' : 'library')) + ' · KomaGlide';
       if (storage) {
         $('storage-summary').textContent = t('storageUsage', {used: size(used), limit: size(limit)});
         if (reset) $('limit').value = String(limit / MiB);
         if (reset) void checkStorageProtection();
       } else {
+        const novelTab = $('novel-tab');
+        if (novelTab) {
+          novelTab.hidden = novels;
+          document.querySelector('.title-row h1').textContent = t(novels ? 'novelShelf' : 'siteLibrary');
+        }
         if (!exporting) shelfHash = location.hash || routePrefix + 'shelf';
         $('usage').textContent = size(used) + ' / ' + size(limit);
-        for (const [id, active] of [['all-tab', !starred && !exporting], ['star-tab', starred], ['export-tab', exporting]]) {
+        for (const [id, active] of [['all-tab', !starred && !exporting && !novels], ['star-tab', starred], ['export-tab', exporting]]) {
           if (active) $(id).setAttribute('aria-current', 'page');
           else $(id).removeAttribute('aria-current');
         }
-        showBooks(data, starred, exporting);
+        showBooks(data, starred, exporting, novels);
       }
     } catch (error) {
       if (version === token) {
@@ -1487,14 +1497,28 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     }
   }
 
+  function showLocalShelf(route) {
+    if (location.hash.startsWith(SHELF_HASH)) location.hash = route;
+    else {
+      history.replaceState(history.state, '', route);
+      displayShelf();
+    }
+  }
+
+  async function openNovelShelf() {
+    // Older caches predate the shared novel entry and were stored on czbooks.net.
+    const entry = webUrl(await read(PREFIX + 'novel-shelf-entry')) || new URL('https://czbooks.net/');
+    entry.hash = SHELF_HASH + 'novels';
+    if (entry.origin === location.origin && (!navigator.onLine || location.hash.startsWith(SHELF_HASH))) {
+      showLocalShelf(entry.hash);
+      return;
+    }
+    return openShelfTab(entry);
+  }
+
   async function openShelf() {
     if (location.hostname === 'czbooks.net' && !navigator.onLine) {
-      if (location.hash.startsWith(SHELF_HASH)) {
-        location.hash = SHELF_HASH + 'shelf';
-      } else {
-        history.replaceState(history.state, '', SHELF_HASH + 'shelf');
-        displayShelf();
-      }
+      showLocalShelf(SHELF_HASH + 'shelf');
       return;
     }
     const siteEntry = origin => read(PREFIX + 'shelf-entry.' + origin);
@@ -1506,6 +1530,10 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
       entry = saved && saved.origin === last.origin ? saved : new URL(location.href);
     }
     entry.hash = SHELF_HASH + 'shelf';
+    return openShelfTab(entry);
+  }
+
+  function openShelfTab(entry) {
     const options = {active: true, setParent: false};
     if (typeof manager.openInTab === 'function') return manager.openInTab(entry.href, options);
     return GM_openInTab(entry.href, options);
@@ -1515,14 +1543,23 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     // The shelf uses the source site's storage origin. Its UI is bundled.
     disposeSourceNovel?.();
     disposeSourceNovel = undefined;
-    // The chapter document has finished parsing. Drop its event handlers and
-    // install the bundled DOM before mounting controls or observing page slots.
+    // Keep the existing document and install the shelf just once.
     const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#f7f6f2\">\n  <meta name=\"referrer\" content=\"no-referrer\">\n  <link rel=\"icon\" href=\"data:,\">\n  <title>本站書庫 · KomaGlide</title>\n<style>:root {\n  color-scheme: light;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n  line-height: 1.6;\n  color: var(--ink);\n  background: var(--paper);\n  --ink: #222520;\n  --muted: #586158;\n  --line: #d4d7cd;\n  --accent: #305c46;\n  --paper: #f7f6f2;\n  --panel: #e9ede2;\n  --slot: #edeee7;\n  --field: #fff;\n  --field-border: #9ca79b;\n  --hover: #e3e9df;\n  --active: #d3ded0;\n  --favorite-ink: #23492d;\n  --favorite-fill: #e3ecd7;\n  --favorite-border: #72866a;\n  --on-accent: #fff;\n  --accent-hover: #244432;\n}\n:root[data-reader-theme=\"dark\"] {\n  color-scheme: dark;\n  --ink: #e8ebe5;\n  --muted: #b2baaf;\n  --line: #434c43;\n  --accent: #b3dbbc;\n  --paper: #161a17;\n  --panel: #202721;\n  --slot: #202520;\n  --field: #29302a;\n  --field-border: #798779;\n  --hover: #344238;\n  --active: #415146;\n  --favorite-ink: #c3dfbe;\n  --favorite-fill: #2d3d30;\n  --favorite-border: #798e78;\n  --on-accent: #192d20;\n  --accent-hover: #c5e5cd;\n}\n:root[data-reader-theme=\"dark\"] :focus-visible {\n  outline-color: #a4c790;\n}\n:root[data-reader-theme=\"dark\"] ::selection {\n  background: #416049;\n  color: #f2f5f0;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; }\n[hidden] { display: none !important; }\nbutton, input { font: inherit; }\na { color: inherit; text-underline-offset: .24em; }\na:hover { color: var(--accent); }\nbutton { cursor: pointer; }\nbutton:disabled { opacity: .55; cursor: wait; }\n:focus-visible { outline: 3px solid #6a8552; outline-offset: 3px; }\n::selection { background: #d6e5c4; }\n.masthead { border-bottom: 1px solid var(--line); }\n.topline, main { width: min(100% - 3rem, 64rem); margin-inline: auto; }\n.topline { min-height: 3.35rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }\n.masthead-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .25rem .75rem; padding-block: .5rem; }\n.brand { font-family: \"DM Sans\", sans-serif; font-size: 1.2rem; font-weight: 750; letter-spacing: -.035em; text-decoration: none; }\n#offline-state, .source, .count, #usage, .hint, figcaption, .back { color: var(--muted); font-size: .88rem; }\n#offline-state { font-size: .75rem; overflow-wrap: anywhere; }\nmain { padding-block: 3rem 5rem; }\nh1, h2, p, figure { margin: 0; }\nh1, h2 { overflow-wrap: anywhere; line-height: 1.35; }\nh1 { font-size: 2.5rem; letter-spacing: -.025em; }\nh2 { font-size: 1.26rem; }\n.title-row, .work-head, .shelf-tools { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }\n.title-row { margin-bottom: 1.1rem; }\n.title-row h1 { min-width: 0; font-size: clamp(1.8125rem, 3vw, 2.25rem); letter-spacing: .015em; }\n.nav-action, button { border: 1px solid var(--field-border); border-radius: .35rem; background: transparent; padding: .38rem .75rem; color: var(--ink); text-decoration: none; white-space: nowrap; }\n.nav-action { color: var(--muted); font-size: .8125rem; padding: .32rem .56rem; border-color: var(--line); }\n.nav-action:hover, button:enabled:hover { background: var(--hover); }\n.nav-action:active, button:enabled:active { background: var(--active); }\n.shelf-tools { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: .25rem 1rem; }\n.shelf-tools nav { display: flex; flex-wrap: wrap; column-gap: 1.3rem; }\n.shelf-tools a { display: flex; align-items: center; min-height: 44px; padding-bottom: .375rem; font-size: .875rem; color: var(--muted); text-decoration: none; }\n.shelf-tools a[aria-current] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); font-weight: 700; }\n#usage, .count, figcaption { font-variant-numeric: tabular-nums; }\n#usage, .work .source, .chapter-row .count { font-size: .75rem; }\n.work { padding-top: clamp(1.5rem, 3vw, 2rem); }\n.work-head { margin-bottom: .875rem; }\n.work-head > div { min-width: 0; }\n.work-head h2 {\n  font: 700 clamp(1.9375rem, 3vw, 2.375rem)/1.35 \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  letter-spacing: .025em;\n}\n.source { overflow-wrap: anywhere; }\n.chapter-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto 44px;\n  align-items: center;\n  column-gap: 1rem;\n  border-top: 1px solid var(--line);\n  padding-block: .75rem;\n}\n.chapter-row:last-child { border-bottom: 1px solid var(--line); }\n.chapter-link { font-weight: 570; overflow-wrap: anywhere; }\n.chapter-row .chapter-link { display: block; min-width: 0; font-size: 1.125rem; line-height: 1.48; font-weight: 650; letter-spacing: .015em; text-decoration: none; }\n.chapter-row .chapter-link:is(:hover, :focus-visible) { color: var(--accent); text-decoration: underline; }\n.chapter-heading { display: flex; align-items: baseline; gap: .625rem; }\n.chapter-heading > span { min-width: 0; }\n.chapter-ordinal { flex: none; max-width: 42%; font-size: .8125rem; font-weight: 500; letter-spacing: normal; color: var(--muted); }\n.chapter-separator { font-size: 0; }\n.chapter-subtitle { display: block; color: var(--muted); font-size: .88rem; font-weight: normal; overflow-wrap: anywhere; }\n.favorite { color: var(--muted); font-size: .75rem; padding: .32rem .56rem; border-color: var(--line); }\n.favorite[aria-pressed=\"true\"] { color: var(--favorite-ink); border-color: var(--favorite-border); background: var(--favorite-fill); }\n.chapter-row .favorite { display: grid; place-items: center; justify-self: end; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }\n.chapter-row .favorite[aria-pressed=\"true\"] { color: var(--accent); }\n.chapter-row .favorite:hover { background: var(--hover); }\n.chapter-row .favorite:active { background: var(--active); }\n.favorite[aria-disabled=\"true\"] { opacity: .55; cursor: wait; }\n.chapter-row .favorite svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; fill: none; }\n.chapter-row .favorite[aria-pressed=\"true\"] svg { fill: currentColor; }\n#export-tools { position: sticky; top: 0; z-index: 1; display: grid; gap: .25rem; padding-block: .75rem; background: var(--paper); border-bottom: 1px solid var(--line); }\n.export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }\n.export-actions > :is(button, a) { display: inline-flex; align-items: center; min-height: 44px; font-size: .875rem; }\n#export-tools button:disabled { cursor: default; }\n#export-status { margin-top: .25rem; font-size: .875rem; overflow-wrap: anywhere; }\n#export-status[data-error] { font-weight: 650; }\n.export-check { display: grid; place-items: center; width: 44px; height: 44px; cursor: pointer; }\n.export-check input { margin: 0; width: 1.125rem; height: 1.125rem; accent-color: var(--accent); scroll-margin-top: 10rem; }\n.chapter-row label.chapter-link { cursor: pointer; }\n.empty { padding: 4.5rem 0; }\n.empty p, .hint { margin-top: .7rem; color: var(--muted); max-width: 39rem; }\n#notice { margin-bottom: 1.25rem; padding: .7rem 1rem; background: var(--notice-surface, #f2e9cf); color: var(--notice-ink, #574722); border-radius: .3rem; overflow-wrap: anywhere; }\n#notice[data-tone=\"success\"] { background: var(--favorite-fill); color: var(--favorite-ink); font-weight: 650; }\n.notice-detail { display: block; margin-top: .25rem; font-weight: 400; }\n.notice-detail:empty { display: none; }\n.notice-detail a { display: inline-block; }\n.storage-retention { margin-top: 1.75rem; overflow-wrap: anywhere; }\n#request-retention { margin-top: .75rem; min-height: 44px; }\n.back { display: inline-block; margin-bottom: 1.25rem; }\n#storage h1 { margin-bottom: 1rem; }\nform { margin: 1.75rem 0 0; }\nlabel { display: block; font-weight: 650; }\n.field { display: flex; gap: .65rem; margin-top: .5rem; }\ninput { min-width: 0; width: 9rem; padding: .4rem .6rem; border: 1px solid var(--field-border); border-radius: .35rem; background: var(--field); color: var(--ink); }\n.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }\n.primary:is(a, :enabled):is(:hover, :active) { color: var(--on-accent); background: var(--accent-hover); }\n#reader { max-width: 48rem; margin-inline: auto; }\n#chapter-head p { margin-top: .35rem; }\n.reading-chapter #chapter-head h1 { font-size: 1.12rem; }\n.reading-chapter #chapter-head p { color: var(--muted); font-size: .85rem; }\n.reading-chapter #reader-return { margin: 0; }\n#reader-end { display: grid; gap: .6rem; }\n#reader-end:empty { display: none; }\n#reader-tools { height: 0; }\n.reading-chapter .masthead { display: none; }\n.reading-chapter main { width: 100%; padding: 0; }\n.reading-chapter #notice {\n  position: fixed;\n  z-index: 1;\n  inset: auto 0 .75rem;\n  margin: auto;\n  width: max-content;\n  max-width: calc(100% - 2rem);\n  max-height: 35dvh;\n  overflow: auto;\n}\n#pages figcaption {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip-path: inset(50%);\n  white-space: nowrap;\n}\n#reader[data-mode=\"scroll\"] #pages > * + * { margin-top: .25rem; }\n.page-slot { background: var(--slot); aspect-ratio: 2 / 3; width: 100%; }\n.page-slot img { display: block; width: 100%; height: auto; }\n.gap { padding: 1rem; text-align: center; background: var(--slot); color: var(--muted); }\n.theme-picker, .kg-reader-controls label {\n  display: flex;\n  align-items: center;\n  gap: .5rem;\n  font-size: .85rem;\n  font-weight: 500;\n  color: var(--muted);\n}\n.kg-reader-controls select, .theme-picker select {\n  border: 1px solid var(--field-border);\n  border-radius: .35rem;\n  color: var(--ink);\n  background: var(--field);\n  font: inherit;\n  font-size: .88rem;\n  padding: .3rem .55rem;\n  min-height: 2.1rem;\n}\n.kg-reader-controls select:hover, .theme-picker select:hover { background: var(--hover); }\n.theme-picker { flex: none; gap: .3125rem; font-size: .75rem; }\n.theme-picker select { min-height: 1.875rem; padding: .125rem .25rem; font-size: .75rem; border-color: var(--line); background: transparent; }\n.kg-reader-controls button:disabled { cursor: default; }\n.paged-reader #reader { max-width: none; }\n.paged-reader #pages {\n  display: flex;\n  justify-content: center;\n  width: 100%;\n  height: 100dvh;\n  gap: 2px;\n}\n.paged-reader #pages > * {\n  flex: 1 1 0;\n  min-width: 0;\n  direction: ltr;\n}\n.paged-reader .page-slot {\n  height: 100%;\n  background: transparent;\n}\n.paged-reader .page-slot img {\n  height: 100%;\n  object-fit: contain;\n}\n#pages[dir=\"rtl\"] { --first-spine: left; --second-spine: right; }\n#pages[dir=\"ltr\"] { --first-spine: right; --second-spine: left; }\n#reader[data-mode=\"double\"] figure:first-child:not(:only-child) img { object-position: var(--first-spine) center; }\n#reader[data-mode=\"double\"] figure:nth-child(2) img { object-position: var(--second-spine) center; }\n.paged-reader #pages > .gap { display: grid; place-items: center; }\n:root[data-reader-theme=\"dark\"] #notice { --notice-surface: #423b28; --notice-ink: #f0e2bc; }\n@media (max-width: 38rem) {\n  .topline, main { width: calc(100% - 2.5rem); }\n  main { padding-top: 1.6875rem; }\n  h1 { font-size: 1.95rem; }\n  .chapter-row { grid-template-columns: minmax(0, 1fr) 44px; column-gap: .375rem; padding-block: .8125rem .75rem; }\n  .chapter-row .count { grid-column: 1; margin-top: .125rem; }\n  .chapter-row :is(.favorite, .export-check) { grid-column: 2; grid-row: 1 / 3; }\n}\n@media (max-width: 22rem) {\n  .work-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .375rem .5rem; }\n  .work-head > div { display: contents; }\n  .work-head h2, .work-head > :only-child .source { grid-column: 1 / -1; }\n  .work-head .favorite { grid-column: 2; }\n}\n\n.kg-page-gestures { touch-action: pan-y pinch-zoom; }\n\n.kg-reader-controls input[type=\"checkbox\"] {\n  width: 1rem;\n  height: 1rem;\n  margin: 0;\n  padding: 0;\n  accent-color: var(--accent);\n}\n.kg-page-turns[data-direction=\"rtl\"] { flex-direction: row-reverse; }\n\ndialog.kg-thumb-picker {\n  position: fixed;\n  inset: 0;\n  margin: auto;\n  box-sizing: border-box;\n  width: 94vw;\n  height: 92dvh;\n  max-width: 100%;\n  max-height: 100dvh;\n  padding: 0;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--paper);\n  color: var(--ink);\n  font: inherit;\n  text-align: start;\n}\ndialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }\n.kg-thumb-picker::backdrop { background: rgb(9 14 10 / 68%); }\n.kg-thumb-head, .kg-thumb-footer {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: .75rem;\n  padding: .75rem 1rem;\n}\n.kg-thumb-head { flex-wrap: wrap; border-bottom: 1px solid var(--line); }\n.kg-thumb-head strong { font-size: 1.1rem; margin: 0; }\n.kg-thumb-range {\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n}\n.kg-thumb-head .kg-thumb-size {\n  display: inline-flex;\n  align-items: center;\n  gap: .4rem;\n  margin-inline-start: auto;\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  white-space: nowrap;\n}\n.kg-thumb-size select { min-height: 2.1rem; }\n.kg-thumb-footer { justify-content: space-between; border-top: 1px solid var(--line); }\n.kg-thumb-grid {\n  --tile-min: 6rem;\n  display: grid;\n  flex: 1 1 0;\n  min-height: 0;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile-min)), 1fr));\n  grid-auto-rows: max-content;\n  align-content: start;\n  gap: .75rem;\n  padding: 1rem;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scroll-padding: 1rem;\n}\n.kg-thumb-grid[data-size=\"small\"] { --tile-min: 4rem; }\n.kg-thumb-grid[data-size=\"large\"] { --tile-min: clamp(15rem, 24vw, 26rem); }\n.kg-thumb-grid .kg-thumb-page {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: .22rem;\n  min-width: 0;\n  padding: .25rem;\n  border: 1px solid transparent;\n  border-radius: .35rem;\n  background: transparent;\n  color: var(--ink);\n  font: inherit;\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n  white-space: normal;\n  cursor: pointer;\n}\n.kg-thumb-grid .kg-thumb-page:hover { background: var(--hover); }\n.kg-thumb-grid .kg-thumb-page[aria-current=\"page\"] {\n  border-color: var(--accent);\n  color: var(--accent);\n  font-weight: 700;\n}\n.kg-thumb-frame {\n  display: grid;\n  place-items: center;\n  width: 100%;\n  flex: none;\n  aspect-ratio: 3 / 4;\n  overflow: hidden;\n  background: var(--slot, var(--well));\n  color: var(--muted, var(--ink));\n  font-size: .8rem;\n}\n.kg-thumb-frame img {\n  display: block;\n  width: 100%;\n  height: 100%;\n  min-height: 0;\n  object-fit: contain;\n}\n@media (max-width: 38rem) {\n  dialog.kg-thumb-picker { width: calc(100vw - .5rem); height: calc(100dvh - 1rem); }\n  .kg-thumb-head { gap: .4rem .6rem; padding: .6rem; }\n  .kg-thumb-grid { --tile-min: 4.8rem; gap: .5rem; padding: .65rem; }\n  .kg-thumb-grid[data-size=\"small\"] { --tile-min: 3.3rem; }\n  .kg-thumb-grid[data-size=\"large\"] { --tile-min: 12rem; }\n}\n.kg-reader-controls {\n  --edge-width: 2.5rem;\n  --edge-surface: var(--paper);\n  display: contents;\n}\n.kg-reader-controls[hidden] { display: none; }\n.kg-edge, .kg-edge-panel {\n  display: flex;\n  align-items: center;\n}\n.kg-edge {\n  position: fixed;\n  top: 50%;\n  transform: translateY(-50%);\n  z-index: 8;\n  pointer-events: none;\n}\n.kg-edge-left { left: env(safe-area-inset-left, 0px); }\n.kg-edge-right { right: env(safe-area-inset-right, 0px); flex-direction: row-reverse; }\n.kg-reader-controls .kg-edge-toggle {\n  position: relative;\n  padding: .7rem .35rem;\n  width: var(--edge-width);\n  min-height: 3.8rem;\n  display: grid;\n  place-items: center;\n  border: 1px solid var(--line);\n  background: color-mix(in srgb, var(--edge-surface) 91%, transparent);\n  color: var(--ink);\n  font: inherit;\n  font-size: .8rem;\n  font-weight: 600;\n  letter-spacing: .1em;\n  line-height: 1;\n  writing-mode: vertical-rl;\n  text-orientation: upright;\n  pointer-events: auto;\n  cursor: pointer;\n}\n.kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }\n.kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }\n.kg-edge-toggle:lang(en) { text-orientation: mixed; }\n.kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded=\"true\"]) {\n  background: var(--hover);\n  color: var(--accent);\n}\n.kg-edge .kg-edge-panel {\n  position: absolute;\n  width: 15rem;\n  max-width: calc(100vw - 2 * var(--edge-width) - 1.25rem);\n  max-height: calc(100dvh - 2rem);\n  flex-direction: column;\n  align-items: stretch;\n  gap: .65rem;\n  margin: 0;\n  padding: 1rem;\n  overflow: auto;\n  overscroll-behavior: contain;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--edge-surface);\n  color: var(--ink);\n  box-shadow: 0 .3rem 1.2rem rgb(0 0 0 / 18%);\n  font-size: .9rem;\n  line-height: 1.45;\n  pointer-events: auto;\n}\n.kg-edge-panel[hidden] { display: none; }\n.kg-edge-left .kg-edge-panel { left: calc(100% + .35rem); }\n.kg-edge-right .kg-edge-panel { right: calc(100% + .35rem); }\n.kg-edge-panel h2 {\n  margin: 0 0 .2rem;\n  color: var(--ink);\n  font: inherit;\n  font-size: 1.05rem;\n  font-weight: 700;\n}\n.kg-edge-panel > label {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: .6rem;\n  font-size: .875rem;\n}\n.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }\n.kg-edge-panel > label:has(input) { justify-content: start; }\n.kg-edge-extras {\n  display: grid;\n  gap: .6rem;\n  min-width: 0;\n  padding-top: .75rem;\n  border-top: 1px solid var(--line);\n}\n.kg-edge-extras:not(:has(> :not([hidden]))) { display: none; }\n.kg-page-turns {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .25rem;\n}\n.kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }\n.kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }\n.kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }\n</style></head>\n<body>\n  <header class=\"masthead\">\n    <div class=\"topline\">\n      <a class=\"brand\" href=\"#shelf\" aria-label=\"KomaGlide 本站書庫首頁\" data-i18n-label=\"siteLibraryHome\">KomaGlide</a>\n      <div class=\"masthead-tools\">\n        <span id=\"offline-state\" role=\"status\" data-i18n=\"preparingLibrary\"></span>\n        <label class=\"theme-picker\" for=\"library-theme\"><span data-i18n=\"appearance\">外觀</span>\n          <select id=\"library-theme\">\n            <option value=\"system\" data-i18n=\"systemTheme\">跟隨系統</option>\n            <option value=\"light\" data-i18n=\"lightTheme\">淺色</option>\n            <option value=\"dark\" data-i18n=\"darkTheme\">深色</option>\n          </select>\n        </label>\n        <label class=\"theme-picker\" for=\"library-language\">\n          <span data-i18n=\"language\">語言</span>\n          <select id=\"library-language\"></select>\n        </label>\n      </div>\n    </div>\n  </header>\n  <main>\n    <p id=\"notice\" role=\"status\" hidden></p>\n    <section id=\"shelf\">\n      <div class=\"title-row\">\n        <h1 data-i18n=\"siteLibrary\">本站書庫</h1>\n        <a class=\"nav-action\" href=\"#storage\" data-i18n=\"storageSettings\">容量設定</a>\n      </div>\n      <div class=\"shelf-tools\">\n        <nav aria-label=\"書庫篩選\" data-i18n-label=\"libraryFilters\">\n          <a href=\"#shelf\" id=\"all-tab\" data-i18n=\"allWorks\">全部作品</a>\n          <a href=\"#favorites\" id=\"star-tab\" data-i18n=\"favorites\">收藏</a>\n          <a href=\"#export\" id=\"export-tab\" data-i18n=\"exportMode\">匯出模式</a>\n        </nav>\n        <span id=\"usage\"></span>\n      </div>\n      <div id=\"export-tools\" hidden>\n        <div class=\"export-actions\">\n          <button id=\"export-select-all\" type=\"button\" data-i18n=\"exportSelectAll\" disabled>全選</button>\n          <button id=\"export-prepare\" class=\"primary\" type=\"button\" data-i18n=\"exportPrepare\" disabled>準備 ZIP</button>\n          <a id=\"export-download\" class=\"nav-action primary\" data-i18n=\"exportDownload\" hidden>下載 ZIP</a>\n        </div>\n        <p id=\"export-selection\" class=\"count\" role=\"status\"></p>\n        <p class=\"count\" data-i18n=\"exportSavedOnly\">ZIP 包含已儲存的漫畫頁。</p>\n        <p id=\"export-status\" role=\"status\" hidden></p>\n      </div>\n      <div id=\"books\"></div>\n    </section>\n    <section id=\"storage\" hidden>\n      <a class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <h1 data-i18n=\"storageSettings\">容量設定</h1>\n      <p id=\"storage-summary\"></p>\n      <form id=\"limit-form\">\n        <label for=\"limit\" data-i18n=\"storageLimit\">書庫容量上限（MiB）</label>\n        <div class=\"field\"><input type=\"number\" id=\"limit\" required min=\"1\" step=\"1\"><button class=\"primary\" type=\"submit\" data-i18n=\"saveLimit\">儲存上限</button></div>\n      </form>\n      <p class=\"hint\" data-i18n=\"limitHint\">收藏和一般快取共用容量。調低上限時，書庫會優先移除最久沒讀且未收藏的章節。</p>\n      <section class=\"storage-retention\" aria-labelledby=\"retention-title\">\n        <h2 id=\"retention-title\" data-i18n=\"storageProtection\">瀏覽器儲存保護</h2>\n        <p class=\"hint\" id=\"retention\" role=\"status\"></p>\n        <p class=\"hint\" data-i18n=\"storageProtectionHint\">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>\n        <button id=\"request-retention\" type=\"button\" data-i18n=\"requestPersistence\">申請持久儲存</button>\n        <p class=\"hint\" id=\"retention-result\" role=\"status\"></p>\n      </section>\n    </section>\n    <section id=\"reader\" hidden>\n      <a id=\"reader-return\" class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <div id=\"chapter-head\"></div>\n      <div id=\"reader-tools\"></div>\n      <div id=\"pages\"></div>\n      <nav id=\"reader-end\" aria-label=\"話數導覽\" data-i18n-label=\"chapterNavigation\"></nav>\n    </section>\n    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>\n  </main>\n</body>\n</html>\n", 'text/html');
-    document.open();
-    document.close();
+    if (document.documentElement?.hasAttribute('data-komaglide-shelf')) return;
+    if (!document.doctype) {
+      document.insertBefore(document.implementation.createDocumentType('html', '', ''), document.firstChild);
+    }
     const root = document.importNode(shell.documentElement, true);
+    root.setAttribute('data-komaglide-shelf', '');
     if (document.documentElement) document.documentElement.replaceWith(root);
     else document.appendChild(root);
+    const novels = document.createElement('button');
+    novels.id = 'novel-tab';
+    novels.type = 'button';
+    novels.className = 'nav-action';
+    novels.textContent = t('novelShelf');
+    novels.onclick = openNovelShelf;
+    document.querySelector('.title-row').append(novels);
     mountShelf(SHELF_HASH, {
       ...getShelfEvents(),
       saveLanguage: value => write(languageKey, value),
@@ -2761,6 +2798,7 @@ function detectCzbooks(root, address) {
         chapters.set(id, {id, title: name, url: url.href});
       }
       if (!chapters.size || (chapterId && !chapters.has(chapterId))) throw new Error('找不到章節目錄');
+      void write(PREFIX + 'novel-shelf-entry', bookUrl.href).catch(() => {});
       const ordered = [...chapters.values()];
       ordered.forEach((chapter, index) => { chapter.order = index + 1; });
       return {
@@ -5122,10 +5160,21 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
   async function start() {
     setLocale(await language);
     registerMenu(t('openKomaGlideLibrary'), openShelf);
+    registerMenu(t('novelShelf'), openNovelShelf);
     if (location.hash.startsWith(SHELF_HASH)) displayShelf();
     else if (!runCzbooksNovel()) runSource();
   }
-  if (document.readyState === 'loading') {
+  if (location.hash.startsWith(SHELF_HASH)) {
+    document.komaGlideShelfActive = true;
+    if (document.readyState === 'loading') {
+      window.stop();
+      document.open();
+      document.write('<!doctype html><html data-komaglide-opening><head></head><body></body></html>');
+      document.close();
+    }
+    // Mount after WebKit/Chromium finish replacing the cancelled navigation document.
+    setTimeout(start, 0);
+  } else if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start, {once: true});
   } else {
     void start();

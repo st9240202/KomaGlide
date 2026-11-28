@@ -89,6 +89,7 @@ const translations = {
   connecting: ['正在接續…', 'Loading next section…', '続きのページを読み込み中…', '正在接续…'],
   autoContinue: ['自動接下一話', 'Continue Automatically', '自動で次の話へ', '自动接下一话'],
   closeReader: ['關閉閱讀器', 'Close Reader', 'リーダーを閉じる', '关闭阅读器'],
+  novelShelf: ['小說書庫', 'Novel Library', '小説の本棚', '小说书库'],
   openSiteLibrary: ['開啟本站書庫', 'Open Site Library', 'このサイトの本棚を開く', '打开本站书库'],
   openKomaGlideLibrary: ['開啟 KomaGlide 書庫', 'Open KomaGlide Library', 'KomaGlide の本棚を開く', '打开 KomaGlide 书库'],
   verticalReader: ['直向閱讀器', 'Vertical Reader', '縦読みリーダー', '纵向阅读器'],

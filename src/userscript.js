@@ -2,6 +2,9 @@
 (() => {
   'use strict';
 
+  if (window.top !== window.self || document.komaGlideShelfActive ||
+      document.documentElement?.matches('[data-komaglide-opening],[data-komaglide-shelf]')) return;
+
   const PREFIX = 'kg1.';
   const SHELF_HASH = '#komaglide/';
   const IMAGE_LIMIT = 32 * 1024 * 1024;
@@ -49,14 +52,28 @@
     }
   }
 
+  function showLocalShelf(route) {
+    if (location.hash.startsWith(SHELF_HASH)) location.hash = route;
+    else {
+      history.replaceState(history.state, '', route);
+      displayShelf();
+    }
+  }
+
+  async function openNovelShelf() {
+    // Older caches predate the shared novel entry and were stored on czbooks.net.
+    const entry = webUrl(await read(PREFIX + 'novel-shelf-entry')) || new URL('https://czbooks.net/');
+    entry.hash = SHELF_HASH + 'novels';
+    if (entry.origin === location.origin && (!navigator.onLine || location.hash.startsWith(SHELF_HASH))) {
+      showLocalShelf(entry.hash);
+      return;
+    }
+    return openShelfTab(entry);
+  }
+
   async function openShelf() {
     if (location.hostname === 'czbooks.net' && !navigator.onLine) {
-      if (location.hash.startsWith(SHELF_HASH)) {
-        location.hash = SHELF_HASH + 'shelf';
-      } else {
-        history.replaceState(history.state, '', SHELF_HASH + 'shelf');
-        displayShelf();
-      }
+      showLocalShelf(SHELF_HASH + 'shelf');
       return;
     }
     const siteEntry = origin => read(PREFIX + 'shelf-entry.' + origin);
@@ -68,6 +85,10 @@
       entry = saved && saved.origin === last.origin ? saved : new URL(location.href);
     }
     entry.hash = SHELF_HASH + 'shelf';
+    return openShelfTab(entry);
+  }
+
+  function openShelfTab(entry) {
     const options = {active: true, setParent: false};
     if (typeof manager.openInTab === 'function') return manager.openInTab(entry.href, options);
     return GM_openInTab(entry.href, options);
@@ -77,14 +98,23 @@
     // The shelf uses the source site's storage origin. Its UI is bundled.
     disposeSourceNovel?.();
     disposeSourceNovel = undefined;
-    // The chapter document has finished parsing. Drop its event handlers and
-    // install the bundled DOM before mounting controls or observing page slots.
+    // Keep the existing document and install the shelf just once.
     const shell = new DOMParser().parseFromString(/* INSERT_SHELF_DOCUMENT */, 'text/html');
-    document.open();
-    document.close();
+    if (document.documentElement?.hasAttribute('data-komaglide-shelf')) return;
+    if (!document.doctype) {
+      document.insertBefore(document.implementation.createDocumentType('html', '', ''), document.firstChild);
+    }
     const root = document.importNode(shell.documentElement, true);
+    root.setAttribute('data-komaglide-shelf', '');
     if (document.documentElement) document.documentElement.replaceWith(root);
     else document.appendChild(root);
+    const novels = document.createElement('button');
+    novels.id = 'novel-tab';
+    novels.type = 'button';
+    novels.className = 'nav-action';
+    novels.textContent = t('novelShelf');
+    novels.onclick = openNovelShelf;
+    document.querySelector('.title-row').append(novels);
     mountShelf(SHELF_HASH, {
       ...getShelfEvents(),
       saveLanguage: value => write(languageKey, value),
@@ -1560,10 +1590,21 @@
   async function start() {
     setLocale(await language);
     registerMenu(t('openKomaGlideLibrary'), openShelf);
+    registerMenu(t('novelShelf'), openNovelShelf);
     if (location.hash.startsWith(SHELF_HASH)) displayShelf();
     else if (!runCzbooksNovel()) runSource();
   }
-  if (document.readyState === 'loading') {
+  if (location.hash.startsWith(SHELF_HASH)) {
+    document.komaGlideShelfActive = true;
+    if (document.readyState === 'loading') {
+      window.stop();
+      document.open();
+      document.write('<!doctype html><html data-komaglide-opening><head></head><body></body></html>');
+      document.close();
+    }
+    // Mount after WebKit/Chromium finish replacing the cancelled navigation document.
+    setTimeout(start, 0);
+  } else if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start, {once: true});
   } else {
     void start();

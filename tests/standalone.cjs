@@ -16,7 +16,7 @@ const unrelated = "https://example.org/start";
 function chapterHTML(imagesAvailable) {
   const slots = images.map(url => '<img ' + (imagesAvailable ? 'src' : 'data-src') + '="' + url + '">').join("");
   return '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<h1>第一話</h1><span data-comic-work="測試作品"></span><div id="comic">' + slots + '</div>';
+    '<script>window.chapterPageStarted = true;</script><h1>第一話</h1><span data-comic-work="測試作品"></span><div id="comic">' + slots + '</div>';
 }
 
 async function expectMobileReaderWidth(page) {
@@ -419,6 +419,11 @@ async function run() {
     const shelf = await context.newPage();
     await shelf.goto(target.href);
     await shelf.getByRole("heading", { name: /書庫/, level: 1 }).waitFor();
+    assert.equal(await shelf.evaluate(() => window.chapterPageStarted), undefined, "the host chapter does not start in the shelf tab");
+    await shelf.getByRole("button", {name: "小說書庫", exact: true}).waitFor();
+    const shelfRoot = await shelf.locator("html").elementHandle();
+    await shelf.addScriptTag({content: bundle});
+    assert.ok(await shelfRoot.evaluate(root => root === document.documentElement), "reinjection keeps the mounted shelf");
     await shelf.evaluate(() => {
       window.testStorage = {
         persist: () => new Promise(resolve => {

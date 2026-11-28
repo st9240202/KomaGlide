@@ -53,6 +53,7 @@ function detectCzbooks(root, address) {
         chapters.set(id, {id, title: name, url: url.href});
       }
       if (!chapters.size || (chapterId && !chapters.has(chapterId))) throw new Error('找不到章節目錄');
+      void write(PREFIX + 'novel-shelf-entry', bookUrl.href).catch(() => {});
       const ordered = [...chapters.values()];
       ordered.forEach((chapter, index) => { chapter.order = index + 1; });
       return {

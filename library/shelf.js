@@ -348,11 +348,11 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     }
   };
 
-  function showBooks(data, starred, exporting) {
+  function showBooks(data, starred, exporting, novels) {
     const protectedWorks = new Set(data.favorites.map(key => JSON.stringify(key)));
     const groups = new Map();
     for (const chapter of data.chapters) {
-      if (exporting && chapter.kind === 'novel') continue;
+      if (exporting && chapter.kind === 'novel' || novels && chapter.kind !== 'novel') continue;
       const workKey = chapter.key.slice(0, 2);
       const workStar = chapter.workKnown && protectedWorks.has(JSON.stringify(workKey));
       if (starred && !workStar && !chapter.favorite) continue;
@@ -586,6 +586,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     const hash = location.hash.slice(routePrefix.length);
     const reading = hash.startsWith('read/');
     const storage = hash === 'storage';
+    const novels = hash === 'novels';
     const starred = hash === 'favorites';
     const exporting = hash === 'export';
     if (reset) {
@@ -646,19 +647,24 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       const data = await shelf();
       if (version !== token) return;
       const { used, limit } = data.state;
-      document.title = (storage ? t('storageSettings') : t('library')) + ' · KomaGlide';
+      document.title = (storage ? t('storageSettings') : t(novels ? 'novelShelf' : 'library')) + ' · KomaGlide';
       if (storage) {
         $('storage-summary').textContent = t('storageUsage', {used: size(used), limit: size(limit)});
         if (reset) $('limit').value = String(limit / MiB);
         if (reset) void checkStorageProtection();
       } else {
+        const novelTab = $('novel-tab');
+        if (novelTab) {
+          novelTab.hidden = novels;
+          document.querySelector('.title-row h1').textContent = t(novels ? 'novelShelf' : 'siteLibrary');
+        }
         if (!exporting) shelfHash = location.hash || routePrefix + 'shelf';
         $('usage').textContent = size(used) + ' / ' + size(limit);
-        for (const [id, active] of [['all-tab', !starred && !exporting], ['star-tab', starred], ['export-tab', exporting]]) {
+        for (const [id, active] of [['all-tab', !starred && !exporting && !novels], ['star-tab', starred], ['export-tab', exporting]]) {
           if (active) $(id).setAttribute('aria-current', 'page');
           else $(id).removeAttribute('aria-current');
         }
-        showBooks(data, starred, exporting);
+        showBooks(data, starred, exporting, novels);
       }
     } catch (error) {
       if (version === token) {
