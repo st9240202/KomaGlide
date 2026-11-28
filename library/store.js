@@ -6,12 +6,43 @@ const stores = ['pages', 'chapters', 'favoriteWorks', 'settings'];
 let opening;
 let useImageBytes = false;
 
+function catalogKey(workId) { return ['novelCatalog', workId]; }
+function catalogBytes(entries) { return new TextEncoder().encode(JSON.stringify(entries)).byteLength; }
+function emptyState() { return { used: 0, limit: DEFAULT_LIMIT, clock: 0 }; }
+
+function migrateNovelCatalogs(tx) {
+  const settings = tx.objectStore('settings');
+  const chapters = tx.objectStore('chapters').getAll();
+  const metadata = settings.get('storage');
+  metadata.onsuccess = () => {
+    const state = metadata.result || emptyState();
+    const works = new Set(chapters.result.filter(chapter => chapter.kind === 'novel').map(chapter => chapter.key[1]));
+    const scan = settings.openCursor(IDBKeyRange.bound(['novelCatalog'], ['novelCatalog', []], true, true));
+    scan.onsuccess = () => {
+      const cursor = scan.result;
+      if (!cursor) {
+        settings.put(state, 'storage');
+        return;
+      }
+      const workId = cursor.key[1];
+      const entries = cursor.value;
+      const bytes = Array.isArray(entries) && works.has(workId) ? catalogBytes(entries) : 0;
+      if (bytes && state.used + bytes <= state.limit) {
+        state.catalogs = { ...state.catalogs, [workId]: bytes };
+        state.used += bytes;
+      } else cursor.delete();
+      cursor.continue();
+    };
+  };
+}
+
 function database() {
   if (opening) return opening;
   opening = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      for (const store of stores) req.result.createObjectStore(store);
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = event => {
+      if (!event.oldVersion) for (const store of stores) req.result.createObjectStore(store);
+      else migrateNovelCatalogs(req.transaction);
     };
     req.onerror = () => {
       opening = undefined;
@@ -54,7 +85,7 @@ async function transaction(names, mode, run) {
 }
 
 async function readState(settings) {
-  return await request(settings.get('storage')) || { used: 0, limit: DEFAULT_LIMIT, clock: 0 };
+  return await request(settings.get('storage')) || emptyState();
 }
 
 function touch(state, chapter) {
@@ -77,8 +108,8 @@ function indices(key) {
 
 // Select the complete set of victims before deleting anything. The read-write
 // transaction serializes selection, byte accounting and the actual Blob write.
-async function makeRoom(tables, state, required, skipKey) {
-  if (required <= 0) return;
+async function makeRoom(tables, state, required, skipKey, keepNovelWork) {
+  if (required <= 0) return [];
   const [chapters, favorites] = await Promise.all([
     request(tables.chapters.getAll()), request(tables.favoriteWorks.getAllKeys())
   ]);
@@ -87,15 +118,38 @@ async function makeRoom(tables, state, required, skipKey) {
     !chapter.favorite && !(chapter.workKnown && protectedWorks.has(JSON.stringify(chapter.key.slice(0, 2)))) &&
     (!skipKey || indexedDB.cmp(chapter.key, skipKey) !== 0)
   ).sort((a, b) => a.lastRead - b.lastRead);
+  const remaining = new Map();
+  for (const chapter of chapters) {
+    if (chapter.kind === 'novel') remaining.set(chapter.key[1], (remaining.get(chapter.key[1]) || 0) + 1);
+  }
+  const victims = [];
+  const catalogs = [];
   let bytes = 0;
-  let count = 0;
-  while (count < candidates.length && bytes < required) bytes += candidates[count++].bytes;
+  for (const chapter of candidates) {
+    victims.push(chapter.key);
+    bytes += chapter.bytes;
+    const workId = chapter.key[1];
+    if (chapter.kind === 'novel' && workId !== keepNovelWork) {
+      const count = remaining.get(workId) - 1;
+      remaining.set(workId, count);
+      if (!count && Object.hasOwn(state.catalogs || {}, workId)) {
+        catalogs.push(workId);
+        bytes += state.catalogs[workId];
+      }
+    }
+    if (bytes >= required) break;
+  }
   if (bytes < required) throw new Error(t('insufficientStorage'));
-  for (const { key } of candidates.slice(0, count)) {
+  for (const key of victims) {
     tables.chapters.delete(key);
     tables.pages.delete(indices(key));
   }
+  for (const workId of catalogs) {
+    tables.settings.delete(catalogKey(workId));
+    delete state.catalogs[workId];
+  }
   state.used -= bytes;
+  return victims;
 }
 
 function title(value, fallback) {
@@ -110,23 +164,32 @@ export async function putPage(page, blob) {
     return transaction(stores, 'readwrite', async tables => {
       const pageKey = [...key, page.index];
       const [state, previous, present] = await Promise.all([
-        readState(tables.settings), request(tables.chapters.get(key)), request(tables.pages.getKey(pageKey))
+        readState(tables.settings), request(tables.chapters.get(key)),
+        request(page.confirmedSource ? tables.pages.get(pageKey) : tables.pages.getKey(pageKey))
       ]);
       const chapter = previous || { key, favorite: false, count: 0, bytes: 0, total: null };
-      if (!present) {
-        if (blob.size + chapter.bytes > state.limit) {
+      const imageUrl = title(page.imageUrl, '');
+      const replace = present && page.confirmedSource && !present.confirmedSource && present.imageUrl !== imageUrl;
+      let evicted = [];
+      if (!present || replace) {
+        const previousBytes = replace ? (present.blob?.size ?? present.bytes.byteLength) : 0;
+        const delta = blob.size - previousBytes;
+        if (delta + chapter.bytes > state.limit) {
           throw new Error(t('chapterTooLarge'));
         }
-        await makeRoom(tables, state, state.used + blob.size - state.limit, key);
+        evicted = await makeRoom(tables, state, state.used + delta - state.limit, key);
         try {
-          await request(tables.pages.add({ ...image, imageUrl: title(page.imageUrl, '') }, pageKey));
+          const row = { ...image, imageUrl, confirmedSource: !!page.confirmedSource };
+          await request(replace ? tables.pages.put(row, pageKey) : tables.pages.add(row, pageKey));
         } catch (error) {
           blobRejected = !!image.blob && (error.name === 'UnknownError' || error.name === 'DataCloneError');
           throw error;
         }
-        state.used += blob.size;
-        chapter.bytes += blob.size;
-        chapter.count++;
+        state.used += delta;
+        chapter.bytes += delta;
+        if (!present) chapter.count++;
+        state.imageRevision = (state.imageRevision || 0) + 1;
+        chapter.imageRevision = state.imageRevision;
       }
       chapter.workTitle = title(page.workTitle, chapter.workTitle || key[1]);
       chapter.chapterTitle = title(page.chapterTitle, chapter.chapterTitle || key[2]);
@@ -139,9 +202,10 @@ export async function putPage(page, blob) {
       }
       if (chapter.total && chapter.lastIndex > chapter.total) chapter.total = null;
       if (Number.isFinite(page.chapterOrder)) chapter.order = page.chapterOrder;
-      touch(state, chapter);
+      if (!previous) touch(state, chapter);
       tables.chapters.put(chapter, key);
       tables.settings.put(state, 'storage');
+      return evicted;
     });
   }
 
@@ -152,17 +216,32 @@ export async function putPage(page, blob) {
   // Some WebKit contexts cannot persist Blob records. Convert outside the
   // transaction, after a rejected write and its evictions have rolled back.
   const bytes = await blob.arrayBuffer();
-  await save({ bytes, mime: blob.type });
+  const evicted = await save({ bytes, mime: blob.type });
   useImageBytes = true;
+  return evicted;
 }
 
 export function readNovelCatalog(workId) {
-  return transaction(['settings'], 'readonly', ({settings}) => request(settings.get(['novelCatalog', workId])));
+  return transaction(['settings'], 'readonly', ({settings}) => request(settings.get(catalogKey(workId))));
 }
 
 export function saveNovelCatalog(workId, chapters) {
-  return transaction(['settings'], 'readwrite', ({settings}) =>
-    request(settings.put(chapters.map(({id, title, order, url}) => ({id, title, order, url})), ['novelCatalog', workId])));
+  const entries = chapters.map(({id, title, order, url}) => ({id, title, order, url}));
+  const bytes = catalogBytes(entries);
+  return transaction(['settings', 'chapters'], 'readwrite', async tables => {
+    const {settings} = tables;
+    const [state, saved] = await Promise.all([
+      readState(settings), request(tables.chapters.getAll())
+    ]);
+    if (!saved.some(chapter => chapter.kind === 'novel' && chapter.key[1] === workId)) return false;
+    const delta = bytes - (Object.hasOwn(state.catalogs || {}, workId) ? state.catalogs[workId] : 0);
+    if (state.used + delta > state.limit) return false;
+    state.catalogs = { ...state.catalogs, [workId]: bytes };
+    state.used += delta;
+    settings.put(entries, catalogKey(workId));
+    settings.put(state, 'storage');
+    return true;
+  });
 }
 
 export async function putNovelChapter(novel, paragraphs) {
@@ -174,7 +253,7 @@ export async function putNovelChapter(novel, paragraphs) {
     ]);
     if (bytes > state.limit) throw new Error(t('chapterTooLarge'));
     const delta = bytes - (previous?.bytes || 0);
-    await makeRoom(tables, state, state.used + delta - state.limit, key);
+    const evicted = await makeRoom(tables, state, state.used + delta - state.limit, key, novel.workId);
     const chapter = {
       key, kind: 'novel', workKnown: true, favorite: previous?.favorite ?? false,
       workTitle: novel.workTitle, chapterTitle: novel.chapterTitle, order: novel.order, bytes
@@ -186,6 +265,7 @@ export async function putNovelChapter(novel, paragraphs) {
     touch(state, chapter);
     tables.chapters.put(chapter, key);
     tables.settings.put(state, 'storage');
+    return evicted;
   });
 }
 
@@ -214,14 +294,28 @@ async function chapterRead(key, read) {
 export async function lookupPage(page, includeBlob) {
   const key = identity(page);
   const pageKey = [...key, page.index];
-  const data = await chapterRead(key, (pages, chapter) =>
-    chapter.kind === 'novel' ? null : request(includeBlob ? pages.get(pageKey) : pages.getKey(pageKey)));
-  if (!includeBlob) return { exists: !!data };
-  return { exists: !!data, blob: data ? storedImage(data) : null };
+  const data = await transaction(['pages', 'chapters'], 'readonly', async ({pages, chapters}) => {
+    const chapter = await request(chapters.get(key));
+    if (!chapter || chapter.kind === 'novel') return null;
+    return request(includeBlob || page.confirmedSource ? pages.get(pageKey) : pages.getKey(pageKey));
+  });
+  const matches = data &&
+    (!page.confirmedSource || data.confirmedSource || data.imageUrl === page.imageUrl);
+  if (!includeBlob) return { exists: !!matches };
+  return { exists: !!matches, blob: matches ? storedImage(data) : null };
+}
+
+export function markComicChapterRead(key) {
+  return chapterRead(key, (_pages, chapter) => chapter.kind !== 'novel');
 }
 
 function storedImage(data) {
   return data.blob || new Blob([data.bytes], { type: data.mime });
+}
+
+export function readExportMetadata(keys) {
+  return transaction(['chapters'], 'readonly', ({chapters}) =>
+    Promise.all(keys.map(key => request(chapters.get(key)))));
 }
 
 export async function readExportChapters(keys, validate, signal) {
@@ -287,7 +381,9 @@ export async function setChapterSubtitle(key, subtitle) {
 }
 
 export async function readChapter(key) {
-  return chapterRead(key, async (pages, chapter) => {
+  return transaction(['chapters', 'pages'], 'readonly', async ({chapters, pages}) => {
+    const chapter = await request(chapters.get(key));
+    if (!chapter) return null;
     if (chapter.kind === 'novel') return { chapter };
     const keys = await request(pages.getAllKeys(indices(key)));
     return { chapter, indices: keys.map(pageKey => pageKey[3]) };
@@ -311,9 +407,10 @@ export async function setLimit(bytes) {
   if (!Number.isSafeInteger(bytes) || bytes < 1) throw new Error(t('invalidLimit'));
   return transaction(stores, 'readwrite', async tables => {
     const state = await readState(tables.settings);
-    await makeRoom(tables, state, state.used - bytes);
+    const evicted = await makeRoom(tables, state, state.used - bytes);
     state.limit = bytes;
     tables.settings.put(state, 'storage');
+    return evicted;
   });
 }
 

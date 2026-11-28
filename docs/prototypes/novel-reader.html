@@ -274,7 +274,7 @@ html.native-scroll body { height: auto; min-height: 100dvh; display: block; }
 function mountNovelReader(document, window, source) {
   'use strict';
   const {chapters, workTitle, loadChapter, initialChapter, close, signal} = source;
-  let partialCatalog = Boolean(source.refreshCatalog);
+  let partialCatalog = Boolean(source.partialCatalog);
   const storageKey = source.storageKey;
   const $ = id => document.getElementById(id);
   const reader = $('reader');
@@ -525,9 +525,10 @@ function mountNovelReader(document, window, source) {
     layout(anchor, lastPage);
   }
   function updateChapterNavigation() {
-    for (const link of document.querySelectorAll('.chapter-link')) {
-      if (Number(link.dataset.index) === current) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
+    for (const nav of [desktopToc, mobileToc]) {
+      if (catalogs.get(nav) !== catalogVersion) continue;
+      nav.querySelector('[aria-current="page"]')?.removeAttribute('aria-current');
+      nav.children[current]?.setAttribute('aria-current', 'page');
     }
     const end = $('chapter-end');
     if (current === chapters.length - 1) end.textContent = partialCatalog ? '這是最後一個已存章節' : '全書完';
@@ -539,29 +540,41 @@ function mountNovelReader(document, window, source) {
       end.replaceChildren(next);
     }
   }
+  const desktopToc = $('toc');
+  const catalogs = new Map();
+  let catalogVersion = 0;
   let chapterRows, chapterTitles;
-  function drawCatalog() {
-    for (const nav of [$('toc'), mobileToc]) {
-      nav.replaceChildren();
-      chapters.forEach((chapter, index) => {
-        const button = document.createElement('button');
-        button.className = 'chapter-link';
-        button.dataset.index = index;
-        const num = document.createElement('span');
-        num.className = 'chapter-num';
-        num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
-        const name = document.createElement('span');
-        name.className = 'chapter-name';
-        name.textContent = chapter.title;
-        button.append(num, name);
-        button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
-        nav.append(button);
-      });
+  function drawCatalog(nav) {
+    if (catalogs.get(nav) === catalogVersion) return;
+    const rows = document.createDocumentFragment();
+    chapters.forEach((chapter, index) => {
+      const button = document.createElement('button');
+      button.className = 'chapter-link';
+      const num = document.createElement('span');
+      num.className = 'chapter-num';
+      num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
+      const name = document.createElement('span');
+      name.className = 'chapter-name';
+      name.textContent = chapter.title;
+      button.append(num, name);
+      button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
+      if (index === current) button.setAttribute('aria-current', 'page');
+      rows.append(button);
+    });
+    nav.replaceChildren(rows);
+    catalogs.set(nav, catalogVersion);
+    if (nav === mobileToc) {
+      chapterRows = [...mobileToc.children];
+      chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
     }
-    chapterRows = [...mobileToc.children];
-    chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
   }
-  drawCatalog();
+  function drawVisibleCatalogs() {
+    if (sidebar.getClientRects().length) drawCatalog(desktopToc);
+    if (contents.open) {
+      drawCatalog(mobileToc);
+      filterChapters();
+    }
+  }
   function filterChapters() {
     const query = chapterSearch.value.normalize('NFKC').trim().toLowerCase();
     const ordinal = /^\d+$/.test(query) ? Number(query) : null;
@@ -593,6 +606,7 @@ function mountNovelReader(document, window, source) {
   });
   $('contents-open').onclick = () => {
     contents.showModal();
+    drawCatalog(mobileToc);
     showCurrentChapter();
   };
   $('contents-close').onclick = () => contents.close();
@@ -602,6 +616,7 @@ function mountNovelReader(document, window, source) {
     $('reader-layout').toggleAttribute('data-sidebar-collapsed', collapsed);
     sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
     sidebarToggle.textContent = collapsed ? '展開章節欄' : '收合章節欄';
+    drawVisibleCatalogs();
   }
   sidebarToggle.onclick = () => {
     const anchor = current >= 0 ? position() : null;
@@ -768,21 +783,28 @@ function mountNovelReader(document, window, source) {
         if (signal.aborted || version !== generation) return;
         const active = chapters[current];
         const previous = new Map(chapters.map(item => [item.id, item]));
-        const updated = entries.map(entry => Object.assign(previous.get(entry.id) || {}, entry));
-        const ids = new Set(updated.map(item => item.id));
+        const ids = new Set(entries.map(item => item.id));
+        const updated = entries.slice();
         for (const item of chapters) {
           if (!ids.has(item.id) && (cachedIds.has(item.id) || item.paragraphs || loading)) updated.push(item);
         }
-        chapters.splice(0, chapters.length);
-        for (const item of updated) chapters.push(item);
-        current = chapters.indexOf(active);
+        const changed = chapters.length !== updated.length || updated.some((item, index) => {
+          const previous = chapters[index];
+          return item.id !== previous.id || item.title !== previous.title || item.order !== previous.order || item.url !== previous.url;
+        });
+        if (changed) {
+          chapters.length = 0;
+          for (const item of updated) chapters.push(Object.assign(previous.get(item.id) || {}, item));
+          current = chapters.indexOf(active);
+          catalogVersion++;
+        }
         partialCatalog = false;
         chapterCount = '全 ' + chapters.length + ' 章';
         $('chapter-count').textContent = chapterCount;
-        drawCatalog();
-        filterChapters();
+        if (changed) drawVisibleCatalogs();
+        else if (contents.open && !chapterSearch.value.trim()) $('chapter-results').textContent = chapterCount;
         if (current >= 0) {
-          $('number').textContent = '第 ' + chapters[current].order + ' 章';
+          $('number').textContent = '第 ' + (chapters[current].order ?? current + 1) + ' 章';
           updateChapterNavigation();
           if (!loading) updateProgress();
         }
@@ -803,6 +825,7 @@ function mountNovelReader(document, window, source) {
     }, {passive:true, signal});
   }
   const resizeObserver = new window.ResizeObserver(() => {
+    if (sidebar.getClientRects().length) drawCatalog(desktopToc);
     if (current < 0) return;
     if (paged()) layout(readingAnchor);
     else updateProgress();

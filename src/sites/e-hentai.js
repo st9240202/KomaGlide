@@ -99,6 +99,7 @@ siteAdapters.push(function detectEHentai(root, address) {
       if (directory.subtitle === undefined) await loadBatch(0, signal);
       return directory.subtitle;
     },
-    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index, resolvePage, parallelPages:true,
+    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index, pageSelected:Boolean(reader),
+    resolvePage, parallelPages:true,
     pageLabelSelector:'#i2 .sn div', nextPage:null, nextChapter:null};
 });

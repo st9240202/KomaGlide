@@ -94,7 +94,7 @@
     return GM_openInTab(entry.href, options);
   }
 
-  function displayShelf() {
+  async function displayShelf() {
     // The shelf uses the source site's storage origin. Its UI is bundled.
     disposeSourceNovel?.();
     disposeSourceNovel = undefined;
@@ -119,6 +119,7 @@
       ...getShelfEvents(),
       saveLanguage: value => write(languageKey, value),
       openNovel: openShelfNovel,
+      legacyView: await read(VIEW).catch(() => null),
     });
     document.getElementById('offline-state').textContent = location.host;
   }
@@ -164,14 +165,23 @@
   function pageFor(chapter, entry, live = false) {
     const {img, index} = entry;
     const selected = img.currentSrc || img.getAttribute('src');
-    const src = live ? selected : entry.imageUrl || img.dataset.src || img.dataset.lazySrc ||
+    const lazy = webUrl(entry.lazyImageUrl, chapter.baseURL);
+    const selectedUrl = webUrl(selected, chapter.baseURL);
+    let sourceIsSelected = lazy && lazy.href === selectedUrl?.href;
+    if (lazy && !sourceIsSelected && selectedUrl && lazy.href === webUrl(img.getAttribute('src'), chapter.baseURL)?.href) {
+      const sources = [img, ...(img.closest('picture')?.querySelectorAll('source') || [])];
+      sourceIsSelected = sources.some(node => node.getAttribute('srcset')?.split(',').some(candidate =>
+        webUrl(candidate.trim().split(/\s+/)[0], chapter.baseURL)?.href === selectedUrl.href));
+    }
+    if (live && lazy && !sourceIsSelected) return null;
+    const src = live ? selected : entry.imageUrl || (sourceIsSelected ? selected : lazy?.href) || img.dataset.src || img.dataset.lazySrc ||
       selected || img.getAttribute('srcset')?.split(',')[0]?.trim().split(/\s+/)[0];
     const url = webUrl(src, chapter.baseURL);
     // A lazy reader may not have published src yet; the offline copy is keyed
     // by chapter and page number and can still be read without a URL.
     if (live && !url) return null;
     if (live && entry.imageUrl && webUrl(entry.imageUrl, chapter.baseURL)?.href !== url.href) return null;
-    return {...chapterInfo(chapter), index, imageUrl:url?.href || ''};
+    return {...chapterInfo(chapter), index, imageUrl:url?.href || '', confirmedSource: Boolean(lazy)};
   }
   function chapterInfo({chapterId, chapterTitle, chapterSubtitle, chapterUrl, workId, workTitle, total}) {
     return {site: location.origin, chapterId, chapterTitle, chapterSubtitle, chapterUrl, workId, workTitle,
@@ -273,8 +283,8 @@
         const blob = await runSiteRequest(() => fetchImage(page));
         try {
           const chapterSubtitle = chapterSubtitles.get(page.chapterUrl) ?? page.chapterSubtitle;
-          await putPage({...page, chapterSubtitle}, blob);
-          notifyPageSaved(page);
+          const evicted = await putPage({...page, chapterSubtitle}, blob);
+          notifyPageSaved(page, evicted);
           void rememberSite();
           return {blob};
         } catch (storageError) {
@@ -378,8 +388,9 @@
     h2 {font:600 1.35rem/1.35 "DM Sans","PingFang TC",sans-serif;margin:1.2rem 0;overflow-wrap:anywhere}
     figure {padding:0;margin:0 auto 10px;background:var(--well);width:100%}
     figure img {display:block;max-width:100%;height:auto;margin:auto} figure figcaption {padding:8px;color:var(--alert)}
+    .pages figure[data-measured]:empty::before {content:"";display:block;width:min(100%,var(--image-width));aspect-ratio:var(--image-ratio);margin:auto}
     @media (pointer:coarse) {
-      dialog:not(.paged) .pages figure img {width:100%}
+      dialog:not(.paged) .pages figure img,dialog:not(.paged) .pages figure[data-measured]:empty::before {width:100%}
     }
     label {display:inline-flex;align-items:center;gap:4px;white-space:nowrap} input {accent-color:var(--accent)}
     dialog.paged[open] {overflow:hidden}
@@ -478,6 +489,7 @@
   }
 
   const VIEW = PREFIX + 'reader-view';
+  const BUFFER_MODE = PREFIX + 'reader-buffer-mode';
   const PARALLEL_PRELOAD = PREFIX + 'parallel-preload';
   const SITE_PARALLEL_PRELOAD = PARALLEL_PRELOAD + '.' + location.origin;
   const PARALLEL_PRELOAD_CHOICES = [1, 2, 3, 4, 5, 6];
@@ -569,7 +581,8 @@
     const groups = [];
     let liveChapter = first;
     let sourceScroll;
-    let group, position = first.startIndex || 1, controls, scrollFrame = 0, scrollAnchor = null;
+    let group, position = view.position ?? first.startIndex ?? 1, controls, scrollFrame = 0, scrollAnchor = null;
+    let lastReadGroup, lastReadPage, lastReadAt = 0;
     let mode = ['single', 'double'].includes(view.mode) ? view.mode : 'scroll';
     let theme = ['light', 'dark'].includes(view.theme) ? view.theme : 'system';
     let direction = view.direction === 'ltr' ? 'ltr' : 'rtl';
@@ -595,6 +608,7 @@
     const bufferError = element('div');
     bufferError.hidden = true;
     const entries = new WeakMap();
+    const imageDimensions = new WeakMap();
     const requests = new WeakMap();
     const waitingForSource = new WeakSet();
     const options = {root: overlay || null, rootMargin:'360px 0px'};
@@ -602,8 +616,8 @@
       for (const change of changes) {
         const figure = change.target;
         if (change.isIntersecting) loadFigure(figure);
-        else if (liveChapter?.resolvePage && mode === 'scroll' && requests.has(figure) && !figure.querySelector('img')) {
-          // After a long jump, leave the native pager free for the new viewport.
+        else if (mode === 'scroll' && requests.has(figure)) {
+          // Release old image resources and leave the native pager free for the viewport.
           releaseFigure(figure);
         }
       }
@@ -636,7 +650,7 @@
       if (image) URL.revokeObjectURL(image.url);
       displayedImages.delete(figure);
       figure.replaceChildren();
-      figure.style.minHeight = 'min(60vh, 420px)';
+      figure.style.minHeight = imageDimensions.has(figure) ? '' : 'min(60vh, 420px)';
     }
     function revealNativePage(figure, index) {
       if ((!overlay && !preload) || !liveChapter?.revealPage || groups[0].figures.get(index) !== figure) return false;
@@ -838,6 +852,8 @@
       if (obsolete()) return;
       let page = entries.get(figure);
       const img = element('img');
+      const dimensions = imageDimensions.get(figure);
+      if (dimensions) [img.width, img.height] = dimensions;
       img.alt = t('pageNumber', {page: page.index});
       img.dataset.index = String(page.index);
       let blob = cached.blob;
@@ -873,8 +889,17 @@
         img.src = URL.createObjectURL(blob);
         displayedImages.set(figure, {url:img.src, blob});
       }
-      img.addEventListener('load', () => { figure.style.minHeight = ''; });
-      img.addEventListener('error', () => figure.append(element('figcaption',t('imageDisplayFailed'))));
+      img.addEventListener('load', () => {
+        if (obsolete() || !img.naturalWidth || !img.naturalHeight) return;
+        imageDimensions.set(figure, [img.naturalWidth, img.naturalHeight]);
+        figure.dataset.measured = '';
+        figure.style.setProperty('--image-width', img.naturalWidth + 'px');
+        figure.style.setProperty('--image-ratio', img.naturalWidth + ' / ' + img.naturalHeight);
+        figure.style.minHeight = '';
+      });
+      img.addEventListener('error', () => {
+        if (!obsolete()) figure.append(element('figcaption',t('imageDisplayFailed')));
+      });
       figure.prepend(img);
     }
 
@@ -974,6 +999,18 @@
         restartBuffer();
       } else scheduleBuffer();
     }
+    function recordPosition() {
+      if (lastReadGroup === group && lastReadPage === position) return;
+      const {site, workId, chapterId} = group.chapter;
+      const key = [site, workId || '', chapterId];
+      writeComicPosition(key, position);
+      if (lastReadGroup !== group || Date.now() - lastReadAt >= 5000) {
+        lastReadAt = Date.now();
+        void markComicChapterRead(key).catch(() => {});
+      }
+      lastReadGroup = group;
+      lastReadPage = position;
+    }
     function updateView() {
       if (!overlay || !group) return;
       syncControls();
@@ -1000,7 +1037,9 @@
       }
       renderEnd();
     }
-    function saveView() { void write(VIEW, {mode, theme, direction, tapToTurn, thumbnailSize, bufferMode}); }
+    function saveView() {
+      writeReaderPreferences({mode, theme, direction, tapToTurn, thumbnailSize});
+    }
     function scrollToPosition() {
       // At the end of a short chapter the viewport may also show an earlier page.
       // Keep the selected page until the reader scrolls again.
@@ -1012,6 +1051,7 @@
       position = index;
       updateView();
       if (mode === 'scroll') scrollToPosition();
+      recordPosition();
     }
     function changeMode(value) {
       if (mode === 'scroll') firstVisible();
@@ -1045,6 +1085,7 @@
         group = groups[groups.indexOf(group) + 1];
         position = 1;
         updateView();
+        recordPosition();
         return;
       }
       const next = target();
@@ -1082,6 +1123,7 @@
             group = added;
             position = chapter.entries[0]?.index || 1;
             updateView();
+            recordPosition();
           }
         }
         message.textContent = '';
@@ -1120,6 +1162,7 @@
       group = groups[groups.indexOf(group) - 1];
       position = group.total;
       updateView();
+      recordPosition();
     });
     chapterActions.append(message, previousGroup, nextButton);
     if (!overlay && !preload) chapterActions.append(toggleControl(controller.signal));
@@ -1130,6 +1173,14 @@
     }
     if (overlay) {
       addPages(first, false);
+      // A known current page count takes precedence over an older cache. A
+      // paginated source counts only the pages in its current HTML document.
+      const currentTotal = first.nextPage ? 0 : first.total;
+      const cachedIndices = (view.cached?.indices || []).filter(index => !currentTotal || index <= currentTotal);
+      const cachedTotal = currentTotal ? 0 : view.cached?.chapter.total || 0;
+      group.total = Math.max(group.total, cachedTotal, cachedIndices.at(-1) || 0);
+      for (const index of cachedIndices) ensureFigure(group, index);
+      position = Math.max(1, Math.min(position, group.total || 1));
       const settingsExtras = [
         chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal),
         button(t('library'), openShelf), button(t('closeReader'), () => overlay.close())
@@ -1155,7 +1206,7 @@
         } : null,
         onBufferMode(value) {
           bufferMode = value;
-          saveView();
+          void write(BUFFER_MODE, value).catch(() => {});
           restartBuffer();
         },
         onTheme(value) {
@@ -1184,6 +1235,7 @@
       });
       updateView();
       if (mode === 'scroll' && position > 1) scrollToPosition();
+      recordPosition();
       const clearScrollAnchor = () => { scrollAnchor = null; if (mode === 'scroll') restartBuffer(); };
       const scrollInput = {passive:true, signal:controller.signal};
       for (const type of ['wheel', 'touchmove']) overlay.addEventListener(type, clearScrollAnchor, scrollInput);
@@ -1214,6 +1266,7 @@
           scrollFrame = 0;
           if (mode === 'scroll' && !stopped) {
             firstVisible();
+            recordPosition();
             syncControls();
             checkNativeEnd();
           }
@@ -1223,6 +1276,10 @@
     renderEnd();
     if (!preload) boundary.observe(endMarker);
     function dispose() {
+      if (overlay && scrollFrame && mode === 'scroll') {
+        firstVisible();
+        recordPosition();
+      }
       stopped = true;
       checkNativeBuffer?.();
       controller.abort();
@@ -1369,11 +1426,17 @@
     }
     async function openReader() {
       if (dialog || !chapter) return;
+      const selected = chapter;
+      const key = [location.origin, selected.workId || '', selected.chapterId];
       const resumePreload = preloadJob && chapter.chapterUrl;
       stopPreload();
       dialog = element('dialog');
       dialog.setAttribute('aria-label',t('verticalReader'));
-      const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), chapter.parallelPages && readParallelPreload()]);
+      const [legacyView, bufferMode, parallelPreload, cached] = await Promise.all([
+        read(VIEW).catch(() => null), read(BUFFER_MODE).catch(() => null),
+        selected.parallelPages && readParallelPreload(), readChapter(key).catch(() => null),
+      ]);
+      const position = selected.pageSelected ? selected.startIndex : readComicPosition(key);
       const restoreViewport = fitReaderViewport();
       root.append(dialog);
       dialog.showModal();
@@ -1389,7 +1452,9 @@
         open.focus({preventScroll:true});
         if (resumePreload && resumePreload === chapter.chapterUrl) void startPreload();
       }, {once:true});
-      overlayFlow = createFlow(dialog, chapter, dialog, {...view, parallelPreload});
+      overlayFlow = createFlow(dialog, selected, dialog, {
+        ...readReaderPreferences(legacyView), bufferMode: bufferMode ?? legacyView?.bufferMode, parallelPreload, cached, position,
+      });
     }
     registerMenu(t('verticalReader'), openReader);
     return {
@@ -1424,11 +1489,12 @@
 
   function runSource() {
     let continuation = takeReaderContinuation();
-    const saved = new Set();
+    const saved = new Map();
     const failures = new Map();
     const queue = [];
-    const pending = new Set();
+    const pending = new Map();
     let active = false;
+    let rescanAfterCapture = false;
     let scanScheduled = false;
     let hasNativePager = false;
     let pageLabelSelector;
@@ -1478,7 +1544,7 @@
         if (isCurrentChapter(page)) show(t('savingPage', {page: page.index}));
         try {
           await saveLoaded(page);
-          saved.add(key);
+          saved.set(key, page);
           failures.delete(key);
         } catch (err) {
           const attempts = (failures.get(key)?.attempts || 0) + 1;
@@ -1489,6 +1555,10 @@
       }
       active = false;
       refreshStatus();
+      if (rescanAfterCapture) {
+        rescanAfterCapture = false;
+        schedule();
+      }
     }
 
     let pendingSubtitle;
@@ -1530,8 +1600,18 @@
       if (!controls) {
         controls = sourceReader();
         getShelfEvents().changes.addEventListener('change', ({detail}) => {
-          // A write to another chapter can also evict the displayed chapter.
-          if (detail.kind === 'saved' || detail.kind === 'limit') refreshStatus();
+          for (const [site, workId, chapterId] of detail.evicted || []) {
+            for (const [id, page] of saved) {
+              if (page.site === site && (page.workId || '') === workId && page.chapterId === chapterId) saved.delete(id);
+            }
+          }
+          if (detail.kind === 'saved' && detail.index) {
+            failures.delete(JSON.stringify([detail.site, detail.workId || '', detail.chapterId, detail.index]));
+          } else if (detail.kind === 'limit' && failures.size) {
+            failures.clear();
+            if (!detail.evicted?.length) schedule();
+          }
+          if (detail.kind === 'saved' || detail.kind === 'limit' || detail.evicted?.length) refreshStatus();
         });
       }
       if (!chapterKey || !isCurrentChapter(chapter) || chapterTotal !== chapter.total) {
@@ -1551,10 +1631,18 @@
         const page = pageFor(chapter, entry, true);
         if (!page) continue;
         const key = JSON.stringify([page.site, page.workId, page.chapterId, index]);
+        const previous = saved.get(key);
+        if (previous && (!page.confirmedSource || previous.confirmedSource || previous.imageUrl === page.imageUrl)) continue;
+        if (pending.has(key)) {
+          if (pending.get(key) !== page.imageUrl) rescanAfterCapture = true;
+          continue;
+        }
         const failure = failures.get(key);
-        if (saved.has(key) || pending.has(key) || (failure && (failure.attempts >= 3 || Date.now() < failure.retryAt))) continue;
+        if (failure?.page.imageUrl === page.imageUrl &&
+            (failure.attempts >= 3 || Date.now() < failure.retryAt)) continue;
+        if (failure && failure.page.imageUrl !== page.imageUrl) failures.delete(key);
         queue.push({page, key});
-        pending.add(key);
+        pending.set(key, page.imageUrl);
       }
       void drain();
     }
@@ -1579,7 +1667,9 @@
       if (changes.some(({target, addedNodes}) => target instanceof HTMLImageElement ||
         (pageLabelSelector && target.closest?.(pageLabelSelector)) ||
         [...addedNodes].some(node => node.nodeType === 1 && (node.matches(selector) || node.querySelector(selector))))) schedule();
-    }).observe(document.documentElement, {subtree:true, childList:true, attributes:true, attributeFilter:['src','srcset']});
+    }).observe(document.documentElement, {
+      subtree:true, childList:true, attributes:true, attributeFilter:['src','srcset','data-src','data-lazy-src'],
+    });
     window.addEventListener('popstate', schedule);
     window.addEventListener('hashchange', schedule);
     prepareHitomi(document, new URL(location.href), schedule);

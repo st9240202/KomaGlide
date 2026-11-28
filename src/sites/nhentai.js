@@ -100,7 +100,7 @@ siteAdapters.push(function detectNhentai(root, address) {
   }
 
   return {workId:id, workTitle:data.title, chapterId:id, chapterTitle:data.title, chapterUrl,
-    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index,
+    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index, pageSelected:Boolean(page),
     resolvePage, parallelPages:true, defaultParallelPreload:3, pageLabelSelector:nhPageLabel,
     nextPage:null, nextChapter:null};
 });

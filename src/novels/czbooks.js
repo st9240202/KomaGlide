@@ -43,7 +43,7 @@ function czbooksCatalog(catalog, bookUrl, workId, chapterId) {
   return ordered;
 }
 
-function czbooksLoader(workId, workTitle, chapterId, root) {
+function czbooksLoader(workId, workTitle, chapterId, root, saveCatalog) {
   return async (chapter, abortSignal) => {
     const key = [CZBOOKS_SITE, workId, chapter.id];
     if (chapter.id !== chapterId) {
@@ -55,19 +55,28 @@ function czbooksLoader(workId, workTitle, chapterId, root) {
     const paragraphs = czbooksParagraphs(chapter.id === chapterId ? root : await readCzbooksPage(chapter.url, abortSignal));
     abortSignal.throwIfAborted();
     try {
-      await putNovelChapter({
+      const evicted = await putNovelChapter({
         site: CZBOOKS_SITE, workId, chapterId: chapter.id, workTitle,
         chapterTitle: chapter.title, order: chapter.order
       }, paragraphs);
+      getShelfEvents().announce({kind: 'novel-saved', evicted});
     } catch (error) {
       chapter.cacheFailed = true;
       console.warn('[KomaGlide]', error.message);
       return paragraphs;
     }
-    getShelfEvents().announce({kind: 'novel-saved'});
+    void saveCatalog?.();
     void rememberSite();
     return paragraphs;
   };
+}
+
+async function refreshCzbooksCatalog(bookUrl, workId, signal, update, initialChapter) {
+  if (!navigator.onLine) return;
+  const root = await readCzbooksPage(bookUrl.href, signal);
+  const fresh = czbooksCatalog(root, bookUrl, workId, initialChapter);
+  signal.throwIfAborted();
+  await update(fresh);
 }
 
 function detectCzbooks(root, address) {
@@ -85,14 +94,29 @@ function detectCzbooks(root, address) {
   return {
     title,
     async open(signal) {
-      const catalog = chapterId ? await readCzbooksPage(bookUrl.href, signal) : root;
-      const chapters = czbooksCatalog(catalog, bookUrl, workId, chapterId);
-      await saveNovelCatalog(workId, chapters).catch(() => {});
+      let fullCatalog = chapterId ? await readNovelCatalog(workId).catch(() => null) : czbooksCatalog(root, bookUrl, workId);
+      if (chapterId && !fullCatalog?.some(chapter => chapter.id === chapterId)) fullCatalog = null;
+      let savedCatalog = chapterId ? fullCatalog : null;
+      const chapterName = title.textContent.trim().replace(/^《[^》]+》\s*(?:\d+\.\s*)?/, '') || workTitle;
+      const chapters = fullCatalog?.slice() || [{id: chapterId, title: chapterName, url: address.href}];
+      const saveCatalog = async () => {
+        const entries = fullCatalog;
+        if (entries && entries !== savedCatalog && await saveNovelCatalog(workId, entries).catch(() => false)) {
+          savedCatalog = entries;
+        }
+      };
+      void saveCatalog();
       void write(PREFIX + 'novel-shelf-entry', bookUrl.href).catch(() => {});
       return {
         chapters, workTitle, siteName: CZBOOKS_SITE, initialChapter: chapterId,
         storageKey: czbooksNovelStorageKey(workId), cacheFailure: t('novelCacheFailed'),
-        loadChapter: czbooksLoader(workId, workTitle, chapterId, root),
+        loadChapter: czbooksLoader(workId, workTitle, chapterId, root, saveCatalog),
+        partialCatalog: !fullCatalog,
+        refreshCatalog: chapterId ? (signal, update) => refreshCzbooksCatalog(bookUrl, workId, signal, async fresh => {
+          fullCatalog = fresh;
+          update(fresh);
+          await saveCatalog();
+        }, chapterId) : undefined,
       };
     },
   };
@@ -169,17 +193,16 @@ function openShelfNovel(chapter, related, close) {
     closeLabel: t('backToLibrary'),
     cacheFailure: t('novelCacheFailed'),
     loadChapter: czbooksLoader(workId, chapter.workTitle),
+    partialCatalog: true,
     async refreshCatalog(signal, update) {
       const saved = await readNovelCatalog(workId).catch(() => null);
       if (signal.aborted) return;
       if (saved?.length) update(saved);
-      if (!navigator.onLine) return;
       const bookUrl = new URL('/n/' + encodeURIComponent(workId), location.origin);
-      const page = await readCzbooksPage(bookUrl.href, signal);
-      const fresh = czbooksCatalog(page, bookUrl, workId);
-      signal.throwIfAborted();
-      update(fresh);
-      await saveNovelCatalog(workId, fresh);
+      await refreshCzbooksCatalog(bookUrl, workId, signal, async fresh => {
+        update(fresh);
+        await saveNovelCatalog(workId, fresh);
+      });
     },
   }, new AbortController(), close);
 }

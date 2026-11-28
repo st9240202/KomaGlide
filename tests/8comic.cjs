@@ -25,7 +25,7 @@ function splitChapter(firstSrc) {
 }
 
 async function openSpread(page, bundle) {
-  await page.evaluate(() => GM.setValue("kg1.reader-view", { mode: "double" }));
+  await page.evaluate(() => localStorage.setItem("komaglide.reader.preferences.v1", JSON.stringify({mode: "double"})));
   await page.addScriptTag({ content: bundle });
   await page.getByRole("button", { name: "直向閱讀器", exact: true }).click();
   const reader = page.getByRole("dialog", { name: "直向閱讀器", exact: true });
@@ -80,6 +80,7 @@ async function testChapterContinuation(browser, bundle) {
         JSON.stringify(destination) + ';</script>'});
     });
     await page.goto(first);
+    await page.evaluate(() => localStorage.setItem("komaglide.reader.preferences.v1", JSON.stringify({mode: "scroll"})));
     await page.getByRole("button", {name:"直向閱讀器", exact:true}).click();
     const reader = page.getByRole("dialog", {name:"直向閱讀器", exact:true});
     const image = reader.locator("figure img");
@@ -223,7 +224,7 @@ async function run() {
         }
       });
       for (const slot of [...document.querySelectorAll(".comics-pic")].slice(0, urls.length)) loader.observe(slot);
-      return GM.setValue("kg1.reader-view", {mode:"single"});
+      localStorage.setItem("komaglide.reader.preferences.v1", JSON.stringify({mode: "single"}));
     }, lazyImages);
     await page.addScriptTag({content:bundle});
     await page.getByRole("button", {name:"直向閱讀器", exact:true}).click();

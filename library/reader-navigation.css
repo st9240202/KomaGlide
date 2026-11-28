@@ -223,3 +223,4 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 .kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }
 .kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }
 .kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }
+.kg-edge-right .kg-edge-panel > button { min-height: 44px; }

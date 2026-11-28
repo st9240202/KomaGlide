@@ -16,5 +16,7 @@ siteAdapters.push(function detectGeneric(root, address) {
     if (/^(utm_|fbclid$|gclid$)/i.test(key)) url.searchParams.delete(key);
   }
   return {chapterId: url.pathname + url.search, chapterUrl: url.href, chapterTitle: title,
-    workId: workTitle, workTitle, total: images.length, entries: images.map((img, i) => ({img, index: i + 1}))};
+    workId: workTitle, workTitle, total: images.length, entries: images.map((img, i) => ({
+      img, index: i + 1, lazyImageUrl: img.dataset.src || img.dataset.lazySrc
+    }))};
 });

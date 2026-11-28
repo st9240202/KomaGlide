@@ -105,6 +105,17 @@ function waitForManhuaguiPage(box, counter, index, signal, currentPage, selectPa
   });
 }
 
+const manhuaguiPageChoices = new WeakMap();
+const manhuaguiObservedSelectors = new WeakSet();
+
+function manhuaguiPageChoice(pager, page, explicit) {
+  const previous = manhuaguiPageChoices.get(pager);
+  if (previous?.generated === page || previous?.page === page && previous.explicit) return previous;
+  const choice = {page, explicit};
+  manhuaguiPageChoices.set(pager, choice);
+  return choice;
+}
+
 function detectMobileManhuagui(root, address, workId, chapterId) {
   const heading = root.querySelector('#mangaTitle');
   const work = heading?.querySelector('a[href]');
@@ -118,6 +129,10 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
       !box || !Number.isSafeInteger(total) || total < 1) return null;
 
   const hashPage = () => Number(new URLSearchParams(location.hash.slice(1)).get('p') || 1);
+  const hashIndex = hashPage();
+  const validIndex = Number.isSafeInteger(hashIndex) && hashIndex >= 1 && hashIndex <= total;
+  const choice = manhuaguiPageChoice(box, validIndex ? hashIndex : 1,
+    validIndex && new URLSearchParams(address.hash.slice(1)).has('p'));
   function currentPage() {
     const index = Number(counter.textContent.trim());
     if (index !== hashPage() || !Number.isSafeInteger(index) || index < 1 || index > total) return null;
@@ -128,6 +143,8 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
         index < 1 || index > total || location.pathname !== address.pathname) return null;
     return waitForManhuaguiPage(box, counter, index, signal, currentPage, () => {
       if (hashPage() === index) return;
+      const native = manhuaguiPageChoices.get(box);
+      if (native) native.generated = index;
       const oldURL = location.href;
       const url = new URL(oldURL);
       url.hash = 'p=' + index;
@@ -139,9 +156,8 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
   }
 
   const entry = currentPage();
-  const start = hashPage();
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl:address.origin + address.pathname,
-    total, entries:entry ? [entry] : [], startIndex:Number.isSafeInteger(start) && start >= 1 && start <= total ? start : 1,
+    total, entries:entry ? [entry] : [], startIndex:choice.page, pageSelected:choice.explicit,
     pageLabelSelector:'#pageNo', resolvePage, nextPage:null, nextChapter:null,
     nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, true)};
 }
@@ -162,6 +178,16 @@ siteAdapters.push(function detectManhuagui(root, address) {
   const box = root.querySelector('#mangaBox');
   const total = select?.options.length;
   if (!box || !counter || !total || ![...select.options].every((option, i) => option.value === String(i + 1))) return null;
+  if (!manhuaguiObservedSelectors.has(select)) {
+    select.addEventListener('change', event => {
+      if (event.isTrusted) manhuaguiPageChoices.set(select, {page: Number(select.value), explicit: true});
+    });
+    manhuaguiObservedSelectors.add(select);
+  }
+  const selected = Number(select.value) || 1;
+  const hash = Number(new URLSearchParams(address.hash.slice(1)).get('p'));
+  const hasSelectedHash = Number.isSafeInteger(hash) && hash >= 1 && hash <= total;
+  const choice = manhuaguiPageChoice(select, hasSelectedHash ? hash : selected, hasSelectedHash || selected > 1);
 
   function currentPage() {
     const index = Number(counter.textContent.trim());
@@ -172,6 +198,8 @@ siteAdapters.push(function detectManhuagui(root, address) {
   function resolvePage(index, signal) {
     if (signal.aborted || !select.isConnected || !select.options[index - 1] || location.pathname !== address.pathname) return null;
     return waitForManhuaguiPage(box, counter, index, signal, currentPage, () => {
+      const native = manhuaguiPageChoices.get(select);
+      if (native) native.generated = index;
       select.value = String(index);
       select.dispatchEvent(new Event('change', {bubbles: true}));
     });
@@ -194,6 +222,7 @@ siteAdapters.push(function detectManhuagui(root, address) {
     if (entry) entries.set(index, entry);
   }
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl: address.origin + address.pathname,
-    total, entries: [...entries.values()], pageLabelSelector, resolvePage, nextPage: null, nextChapter: null,
+    total, entries: [...entries.values()], startIndex: choice.page, pageSelected: choice.explicit,
+    pageLabelSelector, resolvePage, nextPage: null, nextChapter: null,
     nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, false)};
 });

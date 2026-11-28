@@ -26,6 +26,6 @@ function getShelfEvents() {
   return shelfEvents;
 }
 
-function notifyPageSaved({site, workId, chapterId}) {
-  getShelfEvents().announce({kind: 'saved', site, workId, chapterId});
+function notifyPageSaved({site, workId, chapterId, index}, evicted) {
+  getShelfEvents().announce({kind: 'saved', site, workId, chapterId, index, evicted});
 }

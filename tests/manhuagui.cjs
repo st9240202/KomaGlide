@@ -184,7 +184,7 @@ async function run() {
             '<h1 id="mangaTitle"><a href="/comic/23394/">測試作品</a> 短篇番外</h1>' +
             '<span class="manga-page"><b id="pageNo">1</b>/4P</span><div id="manga"></div>' });
       }
-      if (url === series || url === chapterUrl || url === scrollChapterUrl || url === series + "762878.html") {
+      if (url === series || url.split("?")[0] === chapterUrl || url === scrollChapterUrl || url === series + "762878.html") {
         return route.fulfill({ contentType: "text/html;charset=utf-8", body: html });
       }
       if (images.includes(url)) {
@@ -258,20 +258,31 @@ async function run() {
       url, method: "GET", anonymous: true, headers: { Referer: new URL(chapterUrl).origin + "/" },
     })));
 
-    await page.reload();
+    await page.goto(chapterUrl + '?resume=1');
     // Browsers can request an eager native image on navigation. Measure only
     // activity caused by opening and turning the cached reader on this document.
     requests.length = 0;
     await installReader(page, bundle);
     await page.getByText(storedCount).waitFor({ timeout: 4000 });
     reader = await openReader(page);
-    await expectPage(reader, 1);
-    await expectPage(reader, 2);
-    await page.keyboard.press("PageDown");
     await expectPage(reader, 3);
     await expectPage(reader, 4);
+    await page.keyboard.press("PageUp");
+    await expectPage(reader, 1);
+    await expectPage(reader, 2);
     assert.deepEqual(requests, []);
     assert.deepEqual(await page.evaluate(() => window.privileged), []);
+
+    await page.goto(chapterUrl + '#p=3');
+    await page.evaluate(url => {
+      document.getElementById('pageSelect').value = '3';
+      document.getElementById('page').textContent = '3';
+      document.getElementById('mangaFile').src = url;
+    }, images[2]);
+    await installReader(page, bundle);
+    reader = await openReader(page);
+    await expectPage(reader, 3);
+    await expectPage(reader, 4);
 
     // The site's continuous-scroll layout leaves the selector at page 1 and
     // appends a page number *after* each loaded image in a separate container.

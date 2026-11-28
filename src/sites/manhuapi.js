@@ -25,7 +25,8 @@ siteAdapters.push(function detectManhuapi(root, address) {
   const total = select?.options.length;
   if (!total) return null;
 
-  const requested = Number(new URLSearchParams(address.hash.slice(1) || address.search).get('p') || 1);
+  const page = new URLSearchParams(address.hash.slice(1) || address.search).get('p');
+  const requested = Number(page || 1);
   const startIndex = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, total) : 1;
   const nativeImage = root.querySelector('.mh_list > p img');
   const currentUrl = manhuapiImageUrl(nativeImage?.currentSrc || nativeImage?.getAttribute('src'), address);
@@ -45,5 +46,6 @@ siteAdapters.push(function detectManhuapi(root, address) {
   const nextUrl = webUrl(next?.getAttribute('href'), address);
   const nextId = nextUrl?.origin === address.origin && manhuapiChapterRoute.exec(nextUrl.pathname)?.[1];
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl: address.origin + address.pathname, entries, total, startIndex,
+    pageSelected: page !== null && Number.isSafeInteger(requested) && requested >= 1 && requested <= total,
     parallelPages: true, nextPage: null, nextChapter: nextId && nextId !== chapterId ? nextUrl.href : null};
 });

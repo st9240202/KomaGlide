@@ -46,8 +46,9 @@ window.addEventListener('message', async event => {
   try {
     if (data.op === 'put') {
       await shell;
-      await putPage(data.page, data.blob);
-      announce({ kind: 'saved', site: data.page.site, workId: data.page.workId || '', chapterId: data.page.chapterId });
+      const evicted = await putPage(data.page, data.blob);
+      const {site, workId = '', chapterId, index} = data.page;
+      announce({kind: 'saved', site, workId, chapterId, index, evicted});
     } else if (data.op === 'ping') {
       await shell;
     } else {

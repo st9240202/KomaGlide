@@ -1,5 +1,37 @@
 import { t } from './i18n.js';
 // This module is also bundled into the userscript's isolated reader dialog.
+export const readerPreferencesKey = 'komaglide.reader.preferences.v1';
+
+export function readReaderPreferences(fallback = {}) {
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(readerPreferencesKey)); } catch { /* Storage may be unavailable. */ }
+  const saved = { ...fallback, ...stored };
+  return {
+    mode: ['single', 'double'].includes(saved.mode) ? saved.mode : 'scroll',
+    theme: ['light', 'dark'].includes(saved.theme) ? saved.theme : 'system',
+    direction: saved.direction === 'ltr' ? 'ltr' : 'rtl',
+    tapToTurn: saved.tapToTurn !== false,
+    thumbnailSize: ['small', 'large'].includes(saved.thumbnailSize) ? saved.thumbnailSize : 'medium',
+  };
+}
+
+export function writeReaderPreferences(preferences) {
+  try { localStorage.setItem(readerPreferencesKey, JSON.stringify(preferences)); } catch { /* Keep the choice for this reader. */ }
+}
+
+function comicProgressKey(key) { return 'komaglide.reader.page.' + JSON.stringify(key); }
+
+export function readComicPosition(key) {
+  try {
+    const page = Number(localStorage.getItem(comicProgressKey(key)));
+    return Number.isSafeInteger(page) && page > 0 ? page : null;
+  } catch { return null; }
+}
+
+export function writeComicPosition(key, page) {
+  try { localStorage.setItem(comicProgressKey(key), String(page)); } catch { /* Keep reading if storage is unavailable. */ }
+}
+
 export function watchReaderTheme(paint, signal) {
   const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
   let choice = 'system';
@@ -425,7 +457,11 @@ export function mountReaderControls(container, options) {
   browse.setAttribute('aria-haspopup', 'dialog');
   settings.panel.append(tapLabel);
   attachExtras(settings.panel, options.settingsExtras);
-  navigation.panel.append(browse);
+  const restart = readerButton(t('readFromStart'), () => {
+    setDrawer(null, true);
+    options.onPick(1);
+  });
+  navigation.panel.append(browse, restart);
   const pager = document.createElement('span');
   pager.className = 'kg-page-turns';
   function turn(step) {
@@ -508,6 +544,7 @@ export function mountReaderControls(container, options) {
     next.setAttribute('aria-keyshortcuts', rtl ? 'ArrowLeft PageDown' : 'ArrowRight PageDown');
     setTheme?.(state.theme);
     browse.disabled = state.total < 1;
+    restart.disabled = state.total < 1;
     pager.hidden = state.mode === 'scroll';
     pager.dataset.direction = state.direction;
     previous.disabled = first <= 1;

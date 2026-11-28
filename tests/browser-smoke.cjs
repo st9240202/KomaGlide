@@ -555,6 +555,14 @@ async function testReadingModes(context, first, second, secondOrigin, hits) {
   }
   assert.deepEqual(followingHits(), before);
 
+  await second.getByRole("button", { name: "直向閱讀器", exact: true }).click();
+  const secondReader = second.getByRole("dialog", { name: "直向閱讀器", exact: true });
+  await setDrawer(secondReader, settingsMenu);
+  const secondMode = secondReader.getByRole("combobox", { name: "閱讀模式", exact: true });
+  assert.equal(await secondMode.inputValue(), "scroll", "a different site's reading mode keeps its own preference");
+  await secondMode.selectOption("single");
+  await secondReader.getByRole("button", { name: "關閉閱讀器" }).click();
+
   // Change the preference from a different website and verify its value and
   // behavior after a fresh navigation on the second comic site.
   await openReader.click();
@@ -671,6 +679,8 @@ async function run() {
       assert.equal(new URL(shelf.url()).origin, new URL(source.url()).origin);
       assert.deepEqual((await links.allTextContents()).map(text => text.trim()).sort(), [...titles].sort());
       await links.filter({ hasText: titles[0] }).click();
+      await setDrawer(shelf, navigationMenu);
+      await shelf.getByRole("button", { name: "從頭讀", exact: true }).click();
       await expectImage(shelf.locator("#pages img[data-index='1']"), expectedImage);
       await shelf.close();
     }

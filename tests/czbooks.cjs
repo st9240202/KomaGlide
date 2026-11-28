@@ -1,7 +1,9 @@
 // Run node scripts/build.mjs, then node tests/czbooks.cjs with playwright-core.
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { webkit } = require('playwright-core');
 const { launchSiteBrowser } = require('./site-fixture.cjs');
+const useWebKit = process.env.PLAYWRIGHT_BROWSER === 'webkit';
 
 const origin = 'https://czbooks.net';
 const catalog = origin + '/n/sample';
@@ -40,6 +42,22 @@ async function swipeAtChapterEnd(page, reader) {
     const area = doc.documentElement.classList.contains('native-scroll') ? doc.scrollingElement : element;
     area.scrollTop = area.scrollHeight;
   });
+  if (useWebKit) {
+    await reader.locator('#chapter-end button').evaluate(button => {
+      const win = button.ownerDocument.defaultView;
+      const rect = button.getBoundingClientRect();
+      for (const [type, dy] of [['touchstart', 0], ['touchmove', 15], ['touchmove', 80], ['touchend', 100]]) {
+        const touch = {identifier: 1, target: button, clientX: rect.x + rect.width / 2,
+          clientY: rect.y + rect.height / 2 - dy};
+        const event = new win.Event(type, {bubbles: true, cancelable: true});
+        Object.defineProperties(event, {
+          touches: {value: type === 'touchend' ? [] : [touch]}, changedTouches: {value: [touch]},
+        });
+        button.dispatchEvent(event);
+      }
+    });
+    return;
+  }
   const box = await reader.locator('#chapter-end button').boundingBox();
   const x = box.x + box.width / 2, y = box.y + box.height / 2;
   const session = await page.context().newCDPSession(page);
@@ -54,7 +72,8 @@ async function swipeAtChapterEnd(page, reader) {
 
 async function verifyStore(page) {
   const stats = await page.evaluate(async novelKey => {
-    const {putNovelChapter, putPage, readNovelChapter, readExportChapters, setLimit, shelf} = await import('/store.js');
+    const {putNovelChapter, putPage, readNovelChapter, readNovelCatalog, readExportChapters, markComicChapterRead,
+      setFavorite, setLimit, shelf} = await import('/store.js');
     const first = [...novelKey, 'c1'];
     const third = [...novelKey, 'c3'];
     const paragraphs = await readNovelChapter(first);
@@ -66,27 +85,37 @@ async function verifyStore(page) {
     const {workTitle, chapterTitle, order} = chapters.find(chapter => chapter.key[2] === chapterId);
     await putNovelChapter({site, workId, chapterId, workTitle, chapterTitle, order}, paragraphs);
     const before = await shelf();
+    const catalogBytes = new TextEncoder().encode(JSON.stringify(await readNovelCatalog(workId))).byteLength;
     await readNovelChapter(third); // Read more recently than the favorite.
     await putPage({site: location.origin, workId: 'comic', chapterId: 'ch1', index: 1}, new Blob(['comic']));
-    await setLimit(textBytes + 5);
+    await setLimit(catalogBytes + textBytes + 5);
     const after = await shelf();
+    const firstKept = Boolean(await readNovelChapter(first));
+    const thirdKept = Boolean(await readNovelChapter(third));
+    await setFavorite(first, false);
+    await markComicChapterRead([location.origin, 'comic', 'ch1']);
+    await setLimit(5);
+    const afterEviction = await shelf();
     return {
-      before: before.state.used, after: after.state.used, textBytes, exportRejected,
-      first: Boolean(await readNovelChapter(first)), third: Boolean(await readNovelChapter(third)),
+      before: before.state.used, after: after.state.used, textBytes, catalogBytes, exportRejected,
+      first: firstKept, third: thirdKept,
       comic: after.chapters.some(chapter => chapter.key[1] === 'comic'),
+      catalogRemoved: await readNovelCatalog(workId) === undefined, finalBytes: afterEviction.state.used,
     };
   }, novelKey);
   assert.deepEqual(stats, {
-    before: stats.textBytes * 3, after: stats.textBytes + 5, textBytes: stats.textBytes, exportRejected: true,
-    first: true, third: false, comic: true,
+    before: stats.catalogBytes + stats.textBytes * 3, after: stats.catalogBytes + stats.textBytes + 5,
+    textBytes: stats.textBytes, catalogBytes: stats.catalogBytes, exportRejected: true,
+    first: true, third: false, comic: true, catalogRemoved: true, finalBytes: 5,
   });
 }
 
 async function run(ios) {
-  const browser = await launchSiteBrowser();
+  const options = {viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true,
+    ...(ios ? {userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS like Mac OS X) AppleWebKit/605.1.15"} : {})};
+  const browser = useWebKit ? await webkit.launchPersistentContext('', options) : await launchSiteBrowser();
   try {
-    const context = await browser.newContext({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true,
-      ...(ios ? {userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS like Mac OS X) AppleWebKit/605.1.15"} : {})});
+    const context = useWebKit ? browser : await browser.newContext(options);
     await context.addInitScript(installManager, ios);
     await context.addInitScript({path: dist});
     const fetched = [];
@@ -142,6 +171,19 @@ async function run(ios) {
     await reader.getByText(body(3)).waitFor();
     await reader.getByRole('button', {name: '返回原站'}).click();
     assert.deepEqual(fetched, [1, 3], 'Reopening the source reader uses the saved chapter');
+    const direct = await context.newPage();
+    const directUrl = catalog + '/c3';
+    await direct.route(catalog, route => route.abort());
+    await direct.route(directUrl, route => route.fulfill({contentType: 'text/html', body:
+      '<!doctype html><meta charset="utf-8"><div class="chapter-detail"><h1 class="name">《潮汐小說》回港</h1>' +
+      '<div class="content"><p>' + body(3) + '</p></div></div>'}));
+    await direct.goto(directUrl);
+    await direct.getByRole('button', {name: 'KomaGlide 小說閱讀器'}).click();
+    const directReader = ios ? direct : direct.frameLocator('iframe[title="KomaGlide 小說閱讀器"]');
+    await directReader.getByText(body(3)).waitFor();
+    await directReader.getByRole('button', {name: '目錄', exact: true}).click();
+    await directReader.locator('#mobile-toc .chapter-link').filter({hasText: '候船室'}).waitFor();
+    await direct.close();
     await page.evaluate(() => window.commands.get('開啟 KomaGlide 書庫')());
     await page.waitForFunction(() => window.shelfUrl?.endsWith('#komaglide/shelf'));
     assert.equal(await page.evaluate(() => window.shelfUrl), catalog + '#komaglide/shelf');
@@ -173,7 +215,10 @@ async function run(ios) {
     await otherReader.getByText(body(1)).waitFor();
     assert.equal(await otherReader.locator('#next').isDisabled(), true, 'Wait for the missing catalog entry instead of skipping a chapter');
     releaseCatalog();
-    await otherReader.locator('#toc .chapter-link').filter({hasText: '候船室'}).waitFor({state: 'attached'});
+    assert.equal(await otherReader.locator('#toc .chapter-link, #mobile-toc .chapter-link').count(), 0,
+      'The mobile reader leaves both catalogs unmounted until requested');
+    await otherReader.getByRole('button', {name: '目錄', exact: true}).click();
+    await otherReader.locator('#mobile-toc .chapter-link').filter({hasText: '候船室'}).waitFor();
     await page.waitForFunction(async () => (await (await import('/store.js')).readNovelCatalog('sample'))?.length === 3);
     await other.close();
 
@@ -189,7 +234,9 @@ async function run(ios) {
     assert.ok(await reader.locator('#reader').evaluate(element =>
       Math.max(element.scrollTop, element.ownerDocument.scrollingElement.scrollTop)) > 300,
       'Opening a previously read chapter from the offline shelf restores its text position');
-    await reader.locator('#toc .chapter-link').filter({hasText: '候船室'}).waitFor({state: 'attached'});
+    await reader.getByRole('button', {name: '目錄', exact: true}).click();
+    await reader.locator('#mobile-toc .chapter-link').filter({hasText: '候船室'}).waitFor();
+    await reader.getByRole('button', {name: '關閉目錄'}).click();
     assert.deepEqual(fetched, [1, 3], 'The full catalog does not prefetch any chapter text');
     await swipeAtChapterEnd(page, reader);
     await reader.getByRole('button', {name: '重試'}).waitFor();

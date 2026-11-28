@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KomaGlide
 // @namespace    https://komaglide.local/
-// @version      0.7.43
+// @version      0.7.44
 // @updateURL    https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @downloadURL  https://raw.githubusercontent.com/st9240202/KomaGlide/main/dist/komaglide.user.js
 // @description  閱讀漫畫與小說、保存漫畫圖片，並從腳本選單開啟本站書庫。
@@ -105,6 +105,7 @@ const translations = {
   exportFailed: ['無法準備 ZIP，請重試。', 'Could not prepare the ZIP. Try again.', 'ZIP を作成できませんでした。もう一度お試しください。', '无法准备 ZIP，请重试。'],
   exportTooLarge: ['選取的漫畫超出單一 ZIP 的容量或檔案數上限，請減少勾選後分批下載。', 'The selection exceeds the size or file count limit for one ZIP. Select fewer chapters and download in batches.', '選択した漫画が ZIP 1 個の容量またはファイル数の上限を超えています。選択する話を減らして、分けてダウンロードしてください。', '所选漫画超出单个 ZIP 的容量或文件数上限，请减少勾选后分批下载。'],
   exportChapterMissing: ['部分選取的章節已無法讀取，請確認選取後重試。', 'Some selected chapters are no longer available. Check your selection and try again.', '選択した話の一部を読み込めません。選択内容を確認してもう一度お試しください。', '部分所选章节已无法读取，请确认选择后重试。'],
+  exportChapterChanged: ['所選章節的頁面已更新，請重新準備 ZIP。', 'The selected pages changed. Prepare the ZIP again.', '選択した話のページが更新されました。ZIPを作り直してください。', '所选章节的页面已更新，请重新准备 ZIP。'],
   backToLibrary: ['返回書庫', 'Back to Library', '本棚に戻る', '返回书库'],
   storageLimit: ['書庫容量上限（MiB）', 'Library storage limit (MiB)', '本棚の容量上限（MiB）', '书库容量上限（MiB）'],
   saveLimit: ['儲存上限', 'Save Limit', '上限を保存', '保存上限'],
@@ -128,6 +129,7 @@ const translations = {
   pageRange: ['{start}–{end} / {total} 頁', '{start}–{end} of {total} pages', '{start}–{end} / {total} ページ', '{start}–{end} / {total} 页'],
   pageNumber: ['第 {page} 頁', 'Page {page}', '{page} ページ', '第 {page} 页'],
   readerSettings: ['閱讀設定', 'Reading Settings', '閲覧設定', '阅读设置'],
+  readFromStart: ['從頭讀', 'Read from start', '最初から読む', '从头读'],
   settings: ['設定', 'Settings', '設定', '设置'],
   pageNavigation: ['頁面導覽', 'Page Navigation', 'ページ移動', '页面导航'],
   navigation: ['導覽', 'Navigate', '移動', '导航'],
@@ -275,12 +277,43 @@ const stores = ['pages', 'chapters', 'favoriteWorks', 'settings'];
 let opening;
 let useImageBytes = false;
 
+function catalogKey(workId) { return ['novelCatalog', workId]; }
+function catalogBytes(entries) { return new TextEncoder().encode(JSON.stringify(entries)).byteLength; }
+function emptyState() { return { used: 0, limit: DEFAULT_LIMIT, clock: 0 }; }
+
+function migrateNovelCatalogs(tx) {
+  const settings = tx.objectStore('settings');
+  const chapters = tx.objectStore('chapters').getAll();
+  const metadata = settings.get('storage');
+  metadata.onsuccess = () => {
+    const state = metadata.result || emptyState();
+    const works = new Set(chapters.result.filter(chapter => chapter.kind === 'novel').map(chapter => chapter.key[1]));
+    const scan = settings.openCursor(IDBKeyRange.bound(['novelCatalog'], ['novelCatalog', []], true, true));
+    scan.onsuccess = () => {
+      const cursor = scan.result;
+      if (!cursor) {
+        settings.put(state, 'storage');
+        return;
+      }
+      const workId = cursor.key[1];
+      const entries = cursor.value;
+      const bytes = Array.isArray(entries) && works.has(workId) ? catalogBytes(entries) : 0;
+      if (bytes && state.used + bytes <= state.limit) {
+        state.catalogs = { ...state.catalogs, [workId]: bytes };
+        state.used += bytes;
+      } else cursor.delete();
+      cursor.continue();
+    };
+  };
+}
+
 function database() {
   if (opening) return opening;
   opening = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      for (const store of stores) req.result.createObjectStore(store);
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = event => {
+      if (!event.oldVersion) for (const store of stores) req.result.createObjectStore(store);
+      else migrateNovelCatalogs(req.transaction);
     };
     req.onerror = () => {
       opening = undefined;
@@ -323,7 +356,7 @@ async function transaction(names, mode, run) {
 }
 
 async function readState(settings) {
-  return await request(settings.get('storage')) || { used: 0, limit: DEFAULT_LIMIT, clock: 0 };
+  return await request(settings.get('storage')) || emptyState();
 }
 
 function touch(state, chapter) {
@@ -346,8 +379,8 @@ function indices(key) {
 
 // Select the complete set of victims before deleting anything. The read-write
 // transaction serializes selection, byte accounting and the actual Blob write.
-async function makeRoom(tables, state, required, skipKey) {
-  if (required <= 0) return;
+async function makeRoom(tables, state, required, skipKey, keepNovelWork) {
+  if (required <= 0) return [];
   const [chapters, favorites] = await Promise.all([
     request(tables.chapters.getAll()), request(tables.favoriteWorks.getAllKeys())
   ]);
@@ -356,15 +389,38 @@ async function makeRoom(tables, state, required, skipKey) {
     !chapter.favorite && !(chapter.workKnown && protectedWorks.has(JSON.stringify(chapter.key.slice(0, 2)))) &&
     (!skipKey || indexedDB.cmp(chapter.key, skipKey) !== 0)
   ).sort((a, b) => a.lastRead - b.lastRead);
+  const remaining = new Map();
+  for (const chapter of chapters) {
+    if (chapter.kind === 'novel') remaining.set(chapter.key[1], (remaining.get(chapter.key[1]) || 0) + 1);
+  }
+  const victims = [];
+  const catalogs = [];
   let bytes = 0;
-  let count = 0;
-  while (count < candidates.length && bytes < required) bytes += candidates[count++].bytes;
+  for (const chapter of candidates) {
+    victims.push(chapter.key);
+    bytes += chapter.bytes;
+    const workId = chapter.key[1];
+    if (chapter.kind === 'novel' && workId !== keepNovelWork) {
+      const count = remaining.get(workId) - 1;
+      remaining.set(workId, count);
+      if (!count && Object.hasOwn(state.catalogs || {}, workId)) {
+        catalogs.push(workId);
+        bytes += state.catalogs[workId];
+      }
+    }
+    if (bytes >= required) break;
+  }
   if (bytes < required) throw new Error(t('insufficientStorage'));
-  for (const { key } of candidates.slice(0, count)) {
+  for (const key of victims) {
     tables.chapters.delete(key);
     tables.pages.delete(indices(key));
   }
+  for (const workId of catalogs) {
+    tables.settings.delete(catalogKey(workId));
+    delete state.catalogs[workId];
+  }
   state.used -= bytes;
+  return victims;
 }
 
 function title(value, fallback) {
@@ -379,23 +435,32 @@ async function putPage(page, blob) {
     return transaction(stores, 'readwrite', async tables => {
       const pageKey = [...key, page.index];
       const [state, previous, present] = await Promise.all([
-        readState(tables.settings), request(tables.chapters.get(key)), request(tables.pages.getKey(pageKey))
+        readState(tables.settings), request(tables.chapters.get(key)),
+        request(page.confirmedSource ? tables.pages.get(pageKey) : tables.pages.getKey(pageKey))
       ]);
       const chapter = previous || { key, favorite: false, count: 0, bytes: 0, total: null };
-      if (!present) {
-        if (blob.size + chapter.bytes > state.limit) {
+      const imageUrl = title(page.imageUrl, '');
+      const replace = present && page.confirmedSource && !present.confirmedSource && present.imageUrl !== imageUrl;
+      let evicted = [];
+      if (!present || replace) {
+        const previousBytes = replace ? (present.blob?.size ?? present.bytes.byteLength) : 0;
+        const delta = blob.size - previousBytes;
+        if (delta + chapter.bytes > state.limit) {
           throw new Error(t('chapterTooLarge'));
         }
-        await makeRoom(tables, state, state.used + blob.size - state.limit, key);
+        evicted = await makeRoom(tables, state, state.used + delta - state.limit, key);
         try {
-          await request(tables.pages.add({ ...image, imageUrl: title(page.imageUrl, '') }, pageKey));
+          const row = { ...image, imageUrl, confirmedSource: !!page.confirmedSource };
+          await request(replace ? tables.pages.put(row, pageKey) : tables.pages.add(row, pageKey));
         } catch (error) {
           blobRejected = !!image.blob && (error.name === 'UnknownError' || error.name === 'DataCloneError');
           throw error;
         }
-        state.used += blob.size;
-        chapter.bytes += blob.size;
-        chapter.count++;
+        state.used += delta;
+        chapter.bytes += delta;
+        if (!present) chapter.count++;
+        state.imageRevision = (state.imageRevision || 0) + 1;
+        chapter.imageRevision = state.imageRevision;
       }
       chapter.workTitle = title(page.workTitle, chapter.workTitle || key[1]);
       chapter.chapterTitle = title(page.chapterTitle, chapter.chapterTitle || key[2]);
@@ -408,9 +473,10 @@ async function putPage(page, blob) {
       }
       if (chapter.total && chapter.lastIndex > chapter.total) chapter.total = null;
       if (Number.isFinite(page.chapterOrder)) chapter.order = page.chapterOrder;
-      touch(state, chapter);
+      if (!previous) touch(state, chapter);
       tables.chapters.put(chapter, key);
       tables.settings.put(state, 'storage');
+      return evicted;
     });
   }
 
@@ -421,17 +487,32 @@ async function putPage(page, blob) {
   // Some WebKit contexts cannot persist Blob records. Convert outside the
   // transaction, after a rejected write and its evictions have rolled back.
   const bytes = await blob.arrayBuffer();
-  await save({ bytes, mime: blob.type });
+  const evicted = await save({ bytes, mime: blob.type });
   useImageBytes = true;
+  return evicted;
 }
 
 function readNovelCatalog(workId) {
-  return transaction(['settings'], 'readonly', ({settings}) => request(settings.get(['novelCatalog', workId])));
+  return transaction(['settings'], 'readonly', ({settings}) => request(settings.get(catalogKey(workId))));
 }
 
 function saveNovelCatalog(workId, chapters) {
-  return transaction(['settings'], 'readwrite', ({settings}) =>
-    request(settings.put(chapters.map(({id, title, order, url}) => ({id, title, order, url})), ['novelCatalog', workId])));
+  const entries = chapters.map(({id, title, order, url}) => ({id, title, order, url}));
+  const bytes = catalogBytes(entries);
+  return transaction(['settings', 'chapters'], 'readwrite', async tables => {
+    const {settings} = tables;
+    const [state, saved] = await Promise.all([
+      readState(settings), request(tables.chapters.getAll())
+    ]);
+    if (!saved.some(chapter => chapter.kind === 'novel' && chapter.key[1] === workId)) return false;
+    const delta = bytes - (Object.hasOwn(state.catalogs || {}, workId) ? state.catalogs[workId] : 0);
+    if (state.used + delta > state.limit) return false;
+    state.catalogs = { ...state.catalogs, [workId]: bytes };
+    state.used += delta;
+    settings.put(entries, catalogKey(workId));
+    settings.put(state, 'storage');
+    return true;
+  });
 }
 
 async function putNovelChapter(novel, paragraphs) {
@@ -443,7 +524,7 @@ async function putNovelChapter(novel, paragraphs) {
     ]);
     if (bytes > state.limit) throw new Error(t('chapterTooLarge'));
     const delta = bytes - (previous?.bytes || 0);
-    await makeRoom(tables, state, state.used + delta - state.limit, key);
+    const evicted = await makeRoom(tables, state, state.used + delta - state.limit, key, novel.workId);
     const chapter = {
       key, kind: 'novel', workKnown: true, favorite: previous?.favorite ?? false,
       workTitle: novel.workTitle, chapterTitle: novel.chapterTitle, order: novel.order, bytes
@@ -455,6 +536,7 @@ async function putNovelChapter(novel, paragraphs) {
     touch(state, chapter);
     tables.chapters.put(chapter, key);
     tables.settings.put(state, 'storage');
+    return evicted;
   });
 }
 
@@ -483,14 +565,28 @@ async function chapterRead(key, read) {
 async function lookupPage(page, includeBlob) {
   const key = identity(page);
   const pageKey = [...key, page.index];
-  const data = await chapterRead(key, (pages, chapter) =>
-    chapter.kind === 'novel' ? null : request(includeBlob ? pages.get(pageKey) : pages.getKey(pageKey)));
-  if (!includeBlob) return { exists: !!data };
-  return { exists: !!data, blob: data ? storedImage(data) : null };
+  const data = await transaction(['pages', 'chapters'], 'readonly', async ({pages, chapters}) => {
+    const chapter = await request(chapters.get(key));
+    if (!chapter || chapter.kind === 'novel') return null;
+    return request(includeBlob || page.confirmedSource ? pages.get(pageKey) : pages.getKey(pageKey));
+  });
+  const matches = data &&
+    (!page.confirmedSource || data.confirmedSource || data.imageUrl === page.imageUrl);
+  if (!includeBlob) return { exists: !!matches };
+  return { exists: !!matches, blob: matches ? storedImage(data) : null };
+}
+
+function markComicChapterRead(key) {
+  return chapterRead(key, (_pages, chapter) => chapter.kind !== 'novel');
 }
 
 function storedImage(data) {
   return data.blob || new Blob([data.bytes], { type: data.mime });
+}
+
+function readExportMetadata(keys) {
+  return transaction(['chapters'], 'readonly', ({chapters}) =>
+    Promise.all(keys.map(key => request(chapters.get(key)))));
 }
 
 async function readExportChapters(keys, validate, signal) {
@@ -556,7 +652,9 @@ async function setChapterSubtitle(key, subtitle) {
 }
 
 async function readChapter(key) {
-  return chapterRead(key, async (pages, chapter) => {
+  return transaction(['chapters', 'pages'], 'readonly', async ({chapters, pages}) => {
+    const chapter = await request(chapters.get(key));
+    if (!chapter) return null;
     if (chapter.kind === 'novel') return { chapter };
     const keys = await request(pages.getAllKeys(indices(key)));
     return { chapter, indices: keys.map(pageKey => pageKey[3]) };
@@ -580,9 +678,10 @@ async function setLimit(bytes) {
   if (!Number.isSafeInteger(bytes) || bytes < 1) throw new Error(t('invalidLimit'));
   return transaction(stores, 'readwrite', async tables => {
     const state = await readState(tables.settings);
-    await makeRoom(tables, state, state.used - bytes);
+    const evicted = await makeRoom(tables, state, state.used - bytes);
     state.limit = bytes;
     tables.settings.put(state, 'storage');
+    return evicted;
   });
 }
 
@@ -629,8 +728,8 @@ function getShelfEvents() {
   return shelfEvents;
 }
 
-function notifyPageSaved({site, workId, chapterId}) {
-  getShelfEvents().announce({kind: 'saved', site, workId, chapterId});
+function notifyPageSaved({site, workId, chapterId, index}, evicted) {
+  getShelfEvents().announce({kind: 'saved', site, workId, chapterId, index, evicted});
 }
 
   // ZIP32 reserves the maximum field values as ZIP64 markers.
@@ -772,7 +871,7 @@ async function makeComicZip(chapters, { signal, progress }) {
 }
 
   
-function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, openNovel }) {
+function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, openNovel, legacyView }) {
   localizeDocument();
   const $ = id => document.getElementById(id);
   const languagePicker = $('library-language');
@@ -809,23 +908,10 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
   const selectedChapters = new Set();
   let exportRows = [];
   let exportJob;
+  let zipChapters;
   let zipClickedAt = 0;
   const MiB = 1024 ** 2;
-  const preferencesKey = 'komaglide.reader.preferences.v1';
-
-  function readPreferences() {
-    let saved;
-    try { saved = JSON.parse(localStorage.getItem(preferencesKey)); } catch { /* Storage may be unavailable. */ }
-    return {
-      mode: ['single', 'double'].includes(saved?.mode) ? saved.mode : 'scroll',
-      theme: ['light', 'dark'].includes(saved?.theme) ? saved.theme : 'system',
-      direction: saved?.direction === 'ltr' ? 'ltr' : 'rtl',
-      tapToTurn: saved?.tapToTurn !== false,
-      thumbnailSize: ['small', 'large'].includes(saved?.thumbnailSize) ? saved.thumbnailSize : 'medium',
-    };
-  }
-
-  let libraryPreferences = readPreferences();
+  let libraryPreferences = readReaderPreferences(legacyView);
   let updateReaderPreferences;
   const themePicker = $('library-theme');
   const themeColor = document.querySelector('meta[name="theme-color"]');
@@ -846,13 +932,13 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
   function changePreference(field, value) {
     const next = { ...libraryPreferences, [field]: value };
     applyLibraryPreferences(next);
-    try { localStorage.setItem(preferencesKey, JSON.stringify(next)); } catch { /* Keep the choice for this tab. */ }
+    writeReaderPreferences(next);
   }
 
   applyLibraryPreferences(libraryPreferences);
   themePicker.addEventListener('change', () => changePreference('theme', themePicker.value));
   window.addEventListener('storage', event => {
-    if (event.key === preferencesKey || event.key === null) applyLibraryPreferences(readPreferences());
+    if (event.key === readerPreferencesKey || event.key === null) applyLibraryPreferences(readReaderPreferences(legacyView));
   });
 
   function el(tag, text, className) {
@@ -1031,6 +1117,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
   function clearPreparedZip() {
     exportJob?.abort();
     exportJob = undefined;
+    zipChapters = undefined;
     const download = $('export-download');
     const url = download.getAttribute('href');
     if (url) {
@@ -1082,21 +1169,37 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     updateExportControls();
   };
   $('export-download').onclick = () => { zipClickedAt = Date.now(); };
+  const exportRevision = chapter => JSON.stringify([chapter.key, chapter.imageRevision, chapter.count]);
+  function clearStaleZip(chapters) {
+    if (chapters.some((chapter, i) => !chapter || exportRevision(chapter) !== zipChapters[i])) {
+      clearPreparedZip();
+      updateExportControls();
+      exportStatus(t(chapters.every(Boolean) ? 'exportChapterChanged' : 'exportChapterMissing'), true);
+      void render();
+      return true;
+    }
+    return false;
+  }
   $('export-prepare').onclick = async () => {
     if (exportJob || !selectedChapters.size) return;
     const prepare = $('export-prepare');
-    const keys = exportRows.filter(({ checkbox }) => selectedChapters.has(checkbox.id)).map(({ chapter }) => chapter.key);
+    const selected = exportRows.filter(({ checkbox }) => selectedChapters.has(checkbox.id)).map(({chapter}) => chapter);
+    const keys = selected.map(chapter => chapter.key);
     clearPreparedZip();
+    zipChapters = selected.map(exportRevision);
     const job = exportJob = new AbortController();
     const { signal } = job;
     updateExportControls();
     exportStatus(t('exportReading'));
     try {
       const chapters = await readExportChapters(keys, validateComicZip, signal);
+      if (signal.aborted || clearStaleZip(chapters.map(({chapter}) => chapter))) return;
       const blob = await makeComicZip(chapters, { signal, progress: (done, total) => {
         if (!signal.aborted) exportStatus(t('exportPackaging', {done, total}));
       }});
       if (signal.aborted) return;
+      const current = await readExportMetadata(keys);
+      if (signal.aborted || clearStaleZip(current)) return;
       const download = $('export-download');
       const host = location.hostname.replace(/[^a-z0-9.-]/gi, '_');
       download.href = URL.createObjectURL(blob);
@@ -1177,6 +1280,13 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
       if (selectedChapters.size !== previousCount) {
         clearPreparedZip();
         exportStatus(t('exportChapterMissing'), true);
+      } else if (zipChapters) {
+        const revisions = new Set(exportRows.filter(({checkbox}) => selectedChapters.has(checkbox.id))
+          .map(({chapter}) => exportRevision(chapter)));
+        if (zipChapters.some(revision => !revisions.has(revision))) {
+          clearPreparedZip();
+          exportStatus(t('exportChapterChanged'), true);
+        }
       }
       updateExportControls();
     }
@@ -1194,6 +1304,9 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     let current = Math.max(1, Math.min(initialPage, total));
     let preferences = libraryPreferences;
     let scrollAnchor;
+    let scrollFrame;
+    let lastReadAt = Date.now();
+    const lifetime = new AbortController();
     const pending = new Map();
     const urls = new Map();
     function release(slot) {
@@ -1271,6 +1384,23 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
       const row = [...list.children].find(node => node.getBoundingClientRect().bottom > 1);
       return row ? Number(row.dataset.first) : total;
     };
+    function recordPosition(page) {
+      writeComicPosition(key, page);
+      if (Date.now() - lastReadAt >= 5000) {
+        lastReadAt = Date.now();
+        void markComicChapterRead(key).catch(() => {});
+      }
+    }
+    function recordScroll() {
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
+      scrollFrame = undefined;
+      if (preferences.mode !== 'scroll') return;
+      const page = pageAtViewport();
+      if (page === current) return;
+      current = page;
+      recordPosition(page);
+      controls.update({ current });
+    }
     function draw(align = false) {
       clear();
       scrollAnchor = undefined;
@@ -1304,6 +1434,14 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
       if (modeChanged) draw(true);
       else controls.update({ ...preferences, current, total });
     }
+    function pick(page) {
+      current = page;
+      recordPosition(page);
+      if (preferences.mode === 'scroll') {
+        alignToPage();
+        controls.update({ current });
+      } else draw();
+    }
     const controls = mountReaderControls(toolbar, {
       ...preferences, keyTarget: document, tapTarget: list,
       settingsExtras: [$('chapter-head'), $('reader-return')],
@@ -1315,21 +1453,20 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
       onThumbnailSize: size => changePreference('thumbnailSize', size),
       getCurrentPage: () => pageAtViewport(),
       getThumbnail: async (index, size) => saved.has(index) ? makeReaderThumbnail(await readerBlob(key, index), size) : null,
-      onPick: page => {
-        current = page;
-        if (preferences.mode === 'scroll') {
-          alignToPage();
-          controls.update({ current });
-        } else draw();
-      },
-      onTurn: page => { current = page; draw(); },
+      onPick: pick, onTurn: pick,
     });
     updateReaderPreferences = applyPreferences;
     list.dir = preferences.mode === 'double' ? preferences.direction : 'ltr';
     document.documentElement.classList.add('reading-chapter');
     draw(initialPage > 1);
+    window.addEventListener('scroll', () => {
+      scrollFrame ||= requestAnimationFrame(recordScroll);
+    }, {passive: true, signal: lifetime.signal});
+    window.addEventListener('pagehide', () => { if (scrollFrame) recordScroll(); }, {signal: lifetime.signal});
     disposePages = () => {
       disposePages = () => {};
+      if (scrollFrame) recordScroll();
+      lifetime.abort();
       updateReaderPreferences = undefined;
       controls.destroy();
       clear();
@@ -1400,7 +1537,8 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
           return;
         }
         if (!indices) throw new Error(t('chapterNotFound'));
-        const current = reset ? 1 : pageAtViewport();
+        const current = reset ? readComicPosition(key) || 1 : pageAtViewport();
+        if (reset) void markComicChapterRead(key).catch(() => {});
         disposePages();
         activeKey = key;
         const source = (chapter.workKnown ? chapter.workTitle + ' · ' : '') + key[0];
@@ -1454,8 +1592,8 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     const button = event.submitter;
     if (button) button.disabled = true;
     try {
-      await setLimit(Number($('limit').value) * MiB);
-      announce({ kind: 'limit' });
+      const evicted = await setLimit(Number($('limit').value) * MiB);
+      announce({ kind: 'limit', evicted });
       notify(t('storageLimitSaved'));
     } catch (error) {
       notify(messageFor(error));
@@ -1548,12 +1686,12 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
     return GM_openInTab(entry.href, options);
   }
 
-  function displayShelf() {
+  async function displayShelf() {
     // The shelf uses the source site's storage origin. Its UI is bundled.
     disposeSourceNovel?.();
     disposeSourceNovel = undefined;
     // Keep the existing document and install the shelf just once.
-    const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#f7f6f2\">\n  <meta name=\"referrer\" content=\"no-referrer\">\n  <link rel=\"icon\" href=\"data:,\">\n  <title>本站書庫 · KomaGlide</title>\n<style>:root {\n  color-scheme: light;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n  line-height: 1.6;\n  color: var(--ink);\n  background: var(--paper);\n  --ink: #222520;\n  --muted: #586158;\n  --line: #d4d7cd;\n  --accent: #305c46;\n  --paper: #f7f6f2;\n  --panel: #e9ede2;\n  --slot: #edeee7;\n  --field: #fff;\n  --field-border: #9ca79b;\n  --hover: #e3e9df;\n  --active: #d3ded0;\n  --favorite-ink: #23492d;\n  --favorite-fill: #e3ecd7;\n  --favorite-border: #72866a;\n  --on-accent: #fff;\n  --accent-hover: #244432;\n}\n:root[data-reader-theme=\"dark\"] {\n  color-scheme: dark;\n  --ink: #e8ebe5;\n  --muted: #b2baaf;\n  --line: #434c43;\n  --accent: #b3dbbc;\n  --paper: #161a17;\n  --panel: #202721;\n  --slot: #202520;\n  --field: #29302a;\n  --field-border: #798779;\n  --hover: #344238;\n  --active: #415146;\n  --favorite-ink: #c3dfbe;\n  --favorite-fill: #2d3d30;\n  --favorite-border: #798e78;\n  --on-accent: #192d20;\n  --accent-hover: #c5e5cd;\n}\n:root[data-reader-theme=\"dark\"] :focus-visible {\n  outline-color: #a4c790;\n}\n:root[data-reader-theme=\"dark\"] ::selection {\n  background: #416049;\n  color: #f2f5f0;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; }\n[hidden] { display: none !important; }\nbutton, input { font: inherit; }\na { color: inherit; text-underline-offset: .24em; }\na:hover { color: var(--accent); }\nbutton { cursor: pointer; }\nbutton:disabled { opacity: .55; cursor: wait; }\n:focus-visible { outline: 3px solid #6a8552; outline-offset: 3px; }\n::selection { background: #d6e5c4; }\n.masthead { border-bottom: 1px solid var(--line); }\n.topline, main { width: min(100% - 3rem, 64rem); margin-inline: auto; }\n.topline { min-height: 3.35rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }\n.masthead-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .25rem .75rem; padding-block: .5rem; }\n.brand { font-family: \"DM Sans\", sans-serif; font-size: 1.2rem; font-weight: 750; letter-spacing: -.035em; text-decoration: none; }\n#offline-state, .source, .count, #usage, .hint, figcaption, .back { color: var(--muted); font-size: .88rem; }\n#offline-state { font-size: .75rem; overflow-wrap: anywhere; }\nmain { padding-block: 3rem 5rem; }\nh1, h2, p, figure { margin: 0; }\nh1, h2 { overflow-wrap: anywhere; line-height: 1.35; }\nh1 { font-size: 2.5rem; letter-spacing: -.025em; }\nh2 { font-size: 1.26rem; }\n.title-row, .work-head, .shelf-tools { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }\n.title-row { margin-bottom: 1.1rem; }\n.title-row h1 { min-width: 0; font-size: clamp(1.8125rem, 3vw, 2.25rem); letter-spacing: .015em; }\n.nav-action, button { border: 1px solid var(--field-border); border-radius: .35rem; background: transparent; padding: .38rem .75rem; color: var(--ink); text-decoration: none; white-space: nowrap; }\n.nav-action { color: var(--muted); font-size: .8125rem; padding: .32rem .56rem; border-color: var(--line); }\n.nav-action:hover, button:enabled:hover { background: var(--hover); }\n.nav-action:active, button:enabled:active { background: var(--active); }\n.shelf-tools { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: .25rem 1rem; }\n.shelf-tools nav { display: flex; flex-wrap: wrap; column-gap: 1.3rem; }\n.shelf-tools a { display: flex; align-items: center; min-height: 44px; padding-bottom: .375rem; font-size: .875rem; color: var(--muted); text-decoration: none; }\n.shelf-tools a[aria-current] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); font-weight: 700; }\n#usage, .count, figcaption { font-variant-numeric: tabular-nums; }\n#usage, .work .source, .chapter-row .count { font-size: .75rem; }\n.work { padding-top: clamp(1.5rem, 3vw, 2rem); }\n.work-head { margin-bottom: .875rem; }\n.work-head > div { min-width: 0; }\n.work-head h2 {\n  font: 700 clamp(1.9375rem, 3vw, 2.375rem)/1.35 \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  letter-spacing: .025em;\n}\n.source { overflow-wrap: anywhere; }\n.chapter-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto 44px;\n  align-items: center;\n  column-gap: 1rem;\n  border-top: 1px solid var(--line);\n  padding-block: .75rem;\n}\n.chapter-row:last-child { border-bottom: 1px solid var(--line); }\n.chapter-link { font-weight: 570; overflow-wrap: anywhere; }\n.chapter-row .chapter-link { display: block; min-width: 0; font-size: 1.125rem; line-height: 1.48; font-weight: 650; letter-spacing: .015em; text-decoration: none; }\n.chapter-row .chapter-link:is(:hover, :focus-visible) { color: var(--accent); text-decoration: underline; }\n.chapter-heading { display: flex; align-items: baseline; gap: .625rem; }\n.chapter-heading > span { min-width: 0; }\n.chapter-ordinal { flex: none; max-width: 42%; font-size: .8125rem; font-weight: 500; letter-spacing: normal; color: var(--muted); }\n.chapter-separator { font-size: 0; }\n.chapter-subtitle { display: block; color: var(--muted); font-size: .88rem; font-weight: normal; overflow-wrap: anywhere; }\n.favorite { color: var(--muted); font-size: .75rem; padding: .32rem .56rem; border-color: var(--line); }\n.favorite[aria-pressed=\"true\"] { color: var(--favorite-ink); border-color: var(--favorite-border); background: var(--favorite-fill); }\n.chapter-row .favorite { display: grid; place-items: center; justify-self: end; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }\n.chapter-row .favorite[aria-pressed=\"true\"] { color: var(--accent); }\n.chapter-row .favorite:hover { background: var(--hover); }\n.chapter-row .favorite:active { background: var(--active); }\n.favorite[aria-disabled=\"true\"] { opacity: .55; cursor: wait; }\n.chapter-row .favorite svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; fill: none; }\n.chapter-row .favorite[aria-pressed=\"true\"] svg { fill: currentColor; }\n#export-tools { position: sticky; top: 0; z-index: 1; display: grid; gap: .25rem; padding-block: .75rem; background: var(--paper); border-bottom: 1px solid var(--line); }\n.export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }\n.export-actions > :is(button, a) { display: inline-flex; align-items: center; min-height: 44px; font-size: .875rem; }\n#export-tools button:disabled { cursor: default; }\n#export-status { margin-top: .25rem; font-size: .875rem; overflow-wrap: anywhere; }\n#export-status[data-error] { font-weight: 650; }\n.export-check { display: grid; place-items: center; width: 44px; height: 44px; cursor: pointer; }\n.export-check input { margin: 0; width: 1.125rem; height: 1.125rem; accent-color: var(--accent); scroll-margin-top: 10rem; }\n.chapter-row label.chapter-link { cursor: pointer; }\n.empty { padding: 4.5rem 0; }\n.empty p, .hint { margin-top: .7rem; color: var(--muted); max-width: 39rem; }\n#notice { margin-bottom: 1.25rem; padding: .7rem 1rem; background: var(--notice-surface, #f2e9cf); color: var(--notice-ink, #574722); border-radius: .3rem; overflow-wrap: anywhere; }\n#notice[data-tone=\"success\"] { background: var(--favorite-fill); color: var(--favorite-ink); font-weight: 650; }\n.notice-detail { display: block; margin-top: .25rem; font-weight: 400; }\n.notice-detail:empty { display: none; }\n.notice-detail a { display: inline-block; }\n.storage-retention { margin-top: 1.75rem; overflow-wrap: anywhere; }\n#request-retention { margin-top: .75rem; min-height: 44px; }\n.back { display: inline-block; margin-bottom: 1.25rem; }\n#storage h1 { margin-bottom: 1rem; }\nform { margin: 1.75rem 0 0; }\nlabel { display: block; font-weight: 650; }\n.field { display: flex; gap: .65rem; margin-top: .5rem; }\ninput { min-width: 0; width: 9rem; padding: .4rem .6rem; border: 1px solid var(--field-border); border-radius: .35rem; background: var(--field); color: var(--ink); }\n.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }\n.primary:is(a, :enabled):is(:hover, :active) { color: var(--on-accent); background: var(--accent-hover); }\n#reader { max-width: 48rem; margin-inline: auto; }\n#chapter-head p { margin-top: .35rem; }\n.reading-chapter #chapter-head h1 { font-size: 1.12rem; }\n.reading-chapter #chapter-head p { color: var(--muted); font-size: .85rem; }\n.reading-chapter #reader-return { margin: 0; }\n#reader-end { display: grid; gap: .6rem; }\n#reader-end:empty { display: none; }\n#reader-tools { height: 0; }\n.reading-chapter .masthead { display: none; }\n.reading-chapter main { width: 100%; padding: 0; }\n.reading-chapter #notice {\n  position: fixed;\n  z-index: 1;\n  inset: auto 0 .75rem;\n  margin: auto;\n  width: max-content;\n  max-width: calc(100% - 2rem);\n  max-height: 35dvh;\n  overflow: auto;\n}\n#pages figcaption {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip-path: inset(50%);\n  white-space: nowrap;\n}\n#reader[data-mode=\"scroll\"] #pages > * + * { margin-top: .25rem; }\n.page-slot { background: var(--slot); aspect-ratio: 2 / 3; width: 100%; }\n.page-slot img { display: block; width: 100%; height: auto; }\n.gap { padding: 1rem; text-align: center; background: var(--slot); color: var(--muted); }\n.theme-picker, .kg-reader-controls label {\n  display: flex;\n  align-items: center;\n  gap: .5rem;\n  font-size: .85rem;\n  font-weight: 500;\n  color: var(--muted);\n}\n.kg-reader-controls select, .theme-picker select {\n  border: 1px solid var(--field-border);\n  border-radius: .35rem;\n  color: var(--ink);\n  background: var(--field);\n  font: inherit;\n  font-size: .88rem;\n  padding: .3rem .55rem;\n  min-height: 2.1rem;\n}\n.kg-reader-controls select:hover, .theme-picker select:hover { background: var(--hover); }\n.theme-picker { flex: none; gap: .3125rem; font-size: .75rem; }\n.theme-picker select { min-height: 1.875rem; padding: .125rem .25rem; font-size: .75rem; border-color: var(--line); background: transparent; }\n.kg-reader-controls button:disabled { cursor: default; }\n.paged-reader #reader { max-width: none; }\n.paged-reader #pages {\n  display: flex;\n  justify-content: center;\n  width: 100%;\n  height: 100dvh;\n  gap: 2px;\n}\n.paged-reader #pages > * {\n  flex: 1 1 0;\n  min-width: 0;\n  direction: ltr;\n}\n.paged-reader .page-slot {\n  height: 100%;\n  background: transparent;\n}\n.paged-reader .page-slot img {\n  height: 100%;\n  object-fit: contain;\n}\n#pages[dir=\"rtl\"] { --first-spine: left; --second-spine: right; }\n#pages[dir=\"ltr\"] { --first-spine: right; --second-spine: left; }\n#reader[data-mode=\"double\"] figure:first-child:not(:only-child) img { object-position: var(--first-spine) center; }\n#reader[data-mode=\"double\"] figure:nth-child(2) img { object-position: var(--second-spine) center; }\n.paged-reader #pages > .gap { display: grid; place-items: center; }\n:root[data-reader-theme=\"dark\"] #notice { --notice-surface: #423b28; --notice-ink: #f0e2bc; }\n@media (max-width: 38rem) {\n  .topline, main { width: calc(100% - 2.5rem); }\n  main { padding-top: 1.6875rem; }\n  h1 { font-size: 1.95rem; }\n  .chapter-row { grid-template-columns: minmax(0, 1fr) 44px; column-gap: .375rem; padding-block: .8125rem .75rem; }\n  .chapter-row .count { grid-column: 1; margin-top: .125rem; }\n  .chapter-row :is(.favorite, .export-check) { grid-column: 2; grid-row: 1 / 3; }\n}\n@media (max-width: 22rem) {\n  .work-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .375rem .5rem; }\n  .work-head > div { display: contents; }\n  .work-head h2, .work-head > :only-child .source { grid-column: 1 / -1; }\n  .work-head .favorite { grid-column: 2; }\n}\n\n.kg-page-gestures { touch-action: pan-y pinch-zoom; }\n\n.kg-reader-controls input[type=\"checkbox\"] {\n  width: 1rem;\n  height: 1rem;\n  margin: 0;\n  padding: 0;\n  accent-color: var(--accent);\n}\n.kg-page-turns[data-direction=\"rtl\"] { flex-direction: row-reverse; }\n\ndialog.kg-thumb-picker {\n  position: fixed;\n  inset: 0;\n  margin: auto;\n  box-sizing: border-box;\n  width: 94vw;\n  height: 92dvh;\n  max-width: 100%;\n  max-height: 100dvh;\n  padding: 0;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--paper);\n  color: var(--ink);\n  font: inherit;\n  text-align: start;\n}\ndialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }\n.kg-thumb-picker::backdrop { background: rgb(9 14 10 / 68%); }\n.kg-thumb-head, .kg-thumb-footer {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: .75rem;\n  padding: .75rem 1rem;\n}\n.kg-thumb-head { flex-wrap: wrap; border-bottom: 1px solid var(--line); }\n.kg-thumb-head strong { font-size: 1.1rem; margin: 0; }\n.kg-thumb-range {\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n}\n.kg-thumb-head .kg-thumb-size {\n  display: inline-flex;\n  align-items: center;\n  gap: .4rem;\n  margin-inline-start: auto;\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  white-space: nowrap;\n}\n.kg-thumb-size select { min-height: 2.1rem; }\n.kg-thumb-footer { justify-content: space-between; border-top: 1px solid var(--line); }\n.kg-thumb-grid {\n  --tile-min: 6rem;\n  display: grid;\n  flex: 1 1 0;\n  min-height: 0;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile-min)), 1fr));\n  grid-auto-rows: max-content;\n  align-content: start;\n  gap: .75rem;\n  padding: 1rem;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scroll-padding: 1rem;\n}\n.kg-thumb-grid[data-size=\"small\"] { --tile-min: 4rem; }\n.kg-thumb-grid[data-size=\"large\"] { --tile-min: clamp(15rem, 24vw, 26rem); }\n.kg-thumb-grid .kg-thumb-page {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: .22rem;\n  min-width: 0;\n  padding: .25rem;\n  border: 1px solid transparent;\n  border-radius: .35rem;\n  background: transparent;\n  color: var(--ink);\n  font: inherit;\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n  white-space: normal;\n  cursor: pointer;\n}\n.kg-thumb-grid .kg-thumb-page:hover { background: var(--hover); }\n.kg-thumb-grid .kg-thumb-page[aria-current=\"page\"] {\n  border-color: var(--accent);\n  color: var(--accent);\n  font-weight: 700;\n}\n.kg-thumb-frame {\n  display: grid;\n  place-items: center;\n  width: 100%;\n  flex: none;\n  aspect-ratio: 3 / 4;\n  overflow: hidden;\n  background: var(--slot, var(--well));\n  color: var(--muted, var(--ink));\n  font-size: .8rem;\n}\n.kg-thumb-frame img {\n  display: block;\n  width: 100%;\n  height: 100%;\n  min-height: 0;\n  object-fit: contain;\n}\n@media (max-width: 38rem) {\n  dialog.kg-thumb-picker { width: calc(100vw - .5rem); height: calc(100dvh - 1rem); }\n  .kg-thumb-head { gap: .4rem .6rem; padding: .6rem; }\n  .kg-thumb-grid { --tile-min: 4.8rem; gap: .5rem; padding: .65rem; }\n  .kg-thumb-grid[data-size=\"small\"] { --tile-min: 3.3rem; }\n  .kg-thumb-grid[data-size=\"large\"] { --tile-min: 12rem; }\n}\n.kg-reader-controls {\n  --edge-width: 2.5rem;\n  --edge-surface: var(--paper);\n  display: contents;\n}\n.kg-reader-controls[hidden] { display: none; }\n.kg-edge, .kg-edge-panel {\n  display: flex;\n  align-items: center;\n}\n.kg-edge {\n  position: fixed;\n  top: 50%;\n  transform: translateY(-50%);\n  z-index: 8;\n  pointer-events: none;\n}\n.kg-edge-left { left: env(safe-area-inset-left, 0px); }\n.kg-edge-right { right: env(safe-area-inset-right, 0px); flex-direction: row-reverse; }\n.kg-reader-controls .kg-edge-toggle {\n  position: relative;\n  padding: .7rem .35rem;\n  width: var(--edge-width);\n  min-height: 3.8rem;\n  display: grid;\n  place-items: center;\n  border: 1px solid var(--line);\n  background: color-mix(in srgb, var(--edge-surface) 91%, transparent);\n  color: var(--ink);\n  font: inherit;\n  font-size: .8rem;\n  font-weight: 600;\n  letter-spacing: .1em;\n  line-height: 1;\n  writing-mode: vertical-rl;\n  text-orientation: upright;\n  pointer-events: auto;\n  cursor: pointer;\n}\n.kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }\n.kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }\n.kg-edge-toggle:lang(en) { text-orientation: mixed; }\n.kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded=\"true\"]) {\n  background: var(--hover);\n  color: var(--accent);\n}\n.kg-edge .kg-edge-panel {\n  position: absolute;\n  width: 15rem;\n  max-width: calc(100vw - 2 * var(--edge-width) - 1.25rem);\n  max-height: calc(100dvh - 2rem);\n  flex-direction: column;\n  align-items: stretch;\n  gap: .65rem;\n  margin: 0;\n  padding: 1rem;\n  overflow: auto;\n  overscroll-behavior: contain;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--edge-surface);\n  color: var(--ink);\n  box-shadow: 0 .3rem 1.2rem rgb(0 0 0 / 18%);\n  font-size: .9rem;\n  line-height: 1.45;\n  pointer-events: auto;\n}\n.kg-edge-panel[hidden] { display: none; }\n.kg-edge-left .kg-edge-panel { left: calc(100% + .35rem); }\n.kg-edge-right .kg-edge-panel { right: calc(100% + .35rem); }\n.kg-edge-panel h2 {\n  margin: 0 0 .2rem;\n  color: var(--ink);\n  font: inherit;\n  font-size: 1.05rem;\n  font-weight: 700;\n}\n.kg-edge-panel > label {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: .6rem;\n  font-size: .875rem;\n}\n.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }\n.kg-edge-panel > label:has(input) { justify-content: start; }\n.kg-edge-extras {\n  display: grid;\n  gap: .6rem;\n  min-width: 0;\n  padding-top: .75rem;\n  border-top: 1px solid var(--line);\n}\n.kg-edge-extras:not(:has(> :not([hidden]))) { display: none; }\n.kg-page-turns {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .25rem;\n}\n.kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }\n.kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }\n.kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }\n</style></head>\n<body>\n  <header class=\"masthead\">\n    <div class=\"topline\">\n      <a class=\"brand\" href=\"#shelf\" aria-label=\"KomaGlide 本站書庫首頁\" data-i18n-label=\"siteLibraryHome\">KomaGlide</a>\n      <div class=\"masthead-tools\">\n        <span id=\"offline-state\" role=\"status\" data-i18n=\"preparingLibrary\"></span>\n        <label class=\"theme-picker\" for=\"library-theme\"><span data-i18n=\"appearance\">外觀</span>\n          <select id=\"library-theme\">\n            <option value=\"system\" data-i18n=\"systemTheme\">跟隨系統</option>\n            <option value=\"light\" data-i18n=\"lightTheme\">淺色</option>\n            <option value=\"dark\" data-i18n=\"darkTheme\">深色</option>\n          </select>\n        </label>\n        <label class=\"theme-picker\" for=\"library-language\">\n          <span data-i18n=\"language\">語言</span>\n          <select id=\"library-language\"></select>\n        </label>\n      </div>\n    </div>\n  </header>\n  <main>\n    <p id=\"notice\" role=\"status\" hidden></p>\n    <section id=\"shelf\">\n      <div class=\"title-row\">\n        <h1 data-i18n=\"siteLibrary\">本站書庫</h1>\n        <a class=\"nav-action\" href=\"#storage\" data-i18n=\"storageSettings\">容量設定</a>\n      </div>\n      <div class=\"shelf-tools\">\n        <nav aria-label=\"書庫篩選\" data-i18n-label=\"libraryFilters\">\n          <a href=\"#shelf\" id=\"all-tab\" data-i18n=\"allWorks\">全部作品</a>\n          <a href=\"#favorites\" id=\"star-tab\" data-i18n=\"favorites\">收藏</a>\n          <a href=\"#export\" id=\"export-tab\" data-i18n=\"exportMode\">匯出模式</a>\n        </nav>\n        <span id=\"usage\"></span>\n      </div>\n      <div id=\"export-tools\" hidden>\n        <div class=\"export-actions\">\n          <button id=\"export-select-all\" type=\"button\" data-i18n=\"exportSelectAll\" disabled>全選</button>\n          <button id=\"export-prepare\" class=\"primary\" type=\"button\" data-i18n=\"exportPrepare\" disabled>準備 ZIP</button>\n          <a id=\"export-download\" class=\"nav-action primary\" data-i18n=\"exportDownload\" hidden>下載 ZIP</a>\n        </div>\n        <p id=\"export-selection\" class=\"count\" role=\"status\"></p>\n        <p class=\"count\" data-i18n=\"exportSavedOnly\">ZIP 包含已儲存的漫畫頁。</p>\n        <p id=\"export-status\" role=\"status\" hidden></p>\n      </div>\n      <div id=\"books\"></div>\n    </section>\n    <section id=\"storage\" hidden>\n      <a class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <h1 data-i18n=\"storageSettings\">容量設定</h1>\n      <p id=\"storage-summary\"></p>\n      <form id=\"limit-form\">\n        <label for=\"limit\" data-i18n=\"storageLimit\">書庫容量上限（MiB）</label>\n        <div class=\"field\"><input type=\"number\" id=\"limit\" required min=\"1\" step=\"1\"><button class=\"primary\" type=\"submit\" data-i18n=\"saveLimit\">儲存上限</button></div>\n      </form>\n      <p class=\"hint\" data-i18n=\"limitHint\">收藏和一般快取共用容量。調低上限時，書庫會優先移除最久沒讀且未收藏的章節。</p>\n      <section class=\"storage-retention\" aria-labelledby=\"retention-title\">\n        <h2 id=\"retention-title\" data-i18n=\"storageProtection\">瀏覽器儲存保護</h2>\n        <p class=\"hint\" id=\"retention\" role=\"status\"></p>\n        <p class=\"hint\" data-i18n=\"storageProtectionHint\">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>\n        <button id=\"request-retention\" type=\"button\" data-i18n=\"requestPersistence\">申請持久儲存</button>\n        <p class=\"hint\" id=\"retention-result\" role=\"status\"></p>\n      </section>\n    </section>\n    <section id=\"reader\" hidden>\n      <a id=\"reader-return\" class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <div id=\"chapter-head\"></div>\n      <div id=\"reader-tools\"></div>\n      <div id=\"pages\"></div>\n      <nav id=\"reader-end\" aria-label=\"話數導覽\" data-i18n-label=\"chapterNavigation\"></nav>\n    </section>\n    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>\n  </main>\n</body>\n</html>\n", 'text/html');
+    const shell = new DOMParser().parseFromString("<!doctype html>\n<html lang=\"zh-Hant\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n  <meta name=\"theme-color\" content=\"#f7f6f2\">\n  <meta name=\"referrer\" content=\"no-referrer\">\n  <link rel=\"icon\" href=\"data:,\">\n  <title>本站書庫 · KomaGlide</title>\n<style>:root {\n  color-scheme: light;\n  font-family: \"DM Sans\", \"PingFang TC\", \"Microsoft JhengHei\", sans-serif;\n  line-height: 1.6;\n  color: var(--ink);\n  background: var(--paper);\n  --ink: #222520;\n  --muted: #586158;\n  --line: #d4d7cd;\n  --accent: #305c46;\n  --paper: #f7f6f2;\n  --panel: #e9ede2;\n  --slot: #edeee7;\n  --field: #fff;\n  --field-border: #9ca79b;\n  --hover: #e3e9df;\n  --active: #d3ded0;\n  --favorite-ink: #23492d;\n  --favorite-fill: #e3ecd7;\n  --favorite-border: #72866a;\n  --on-accent: #fff;\n  --accent-hover: #244432;\n}\n:root[data-reader-theme=\"dark\"] {\n  color-scheme: dark;\n  --ink: #e8ebe5;\n  --muted: #b2baaf;\n  --line: #434c43;\n  --accent: #b3dbbc;\n  --paper: #161a17;\n  --panel: #202721;\n  --slot: #202520;\n  --field: #29302a;\n  --field-border: #798779;\n  --hover: #344238;\n  --active: #415146;\n  --favorite-ink: #c3dfbe;\n  --favorite-fill: #2d3d30;\n  --favorite-border: #798e78;\n  --on-accent: #192d20;\n  --accent-hover: #c5e5cd;\n}\n:root[data-reader-theme=\"dark\"] :focus-visible {\n  outline-color: #a4c790;\n}\n:root[data-reader-theme=\"dark\"] ::selection {\n  background: #416049;\n  color: #f2f5f0;\n}\n* { box-sizing: border-box; }\nbody { margin: 0; }\n[hidden] { display: none !important; }\nbutton, input { font: inherit; }\na { color: inherit; text-underline-offset: .24em; }\na:hover { color: var(--accent); }\nbutton { cursor: pointer; }\nbutton:disabled { opacity: .55; cursor: wait; }\n:focus-visible { outline: 3px solid #6a8552; outline-offset: 3px; }\n::selection { background: #d6e5c4; }\n.masthead { border-bottom: 1px solid var(--line); }\n.topline, main { width: min(100% - 3rem, 64rem); margin-inline: auto; }\n.topline { min-height: 3.35rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }\n.masthead-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .25rem .75rem; padding-block: .5rem; }\n.brand { font-family: \"DM Sans\", sans-serif; font-size: 1.2rem; font-weight: 750; letter-spacing: -.035em; text-decoration: none; }\n#offline-state, .source, .count, #usage, .hint, figcaption, .back { color: var(--muted); font-size: .88rem; }\n#offline-state { font-size: .75rem; overflow-wrap: anywhere; }\nmain { padding-block: 3rem 5rem; }\nh1, h2, p, figure { margin: 0; }\nh1, h2 { overflow-wrap: anywhere; line-height: 1.35; }\nh1 { font-size: 2.5rem; letter-spacing: -.025em; }\nh2 { font-size: 1.26rem; }\n.title-row, .work-head, .shelf-tools { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }\n.title-row { margin-bottom: 1.1rem; }\n.title-row h1 { min-width: 0; font-size: clamp(1.8125rem, 3vw, 2.25rem); letter-spacing: .015em; }\n.nav-action, button { border: 1px solid var(--field-border); border-radius: .35rem; background: transparent; padding: .38rem .75rem; color: var(--ink); text-decoration: none; white-space: nowrap; }\n.nav-action { color: var(--muted); font-size: .8125rem; padding: .32rem .56rem; border-color: var(--line); }\n.nav-action:hover, button:enabled:hover { background: var(--hover); }\n.nav-action:active, button:enabled:active { background: var(--active); }\n.shelf-tools { border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: .25rem 1rem; }\n.shelf-tools nav { display: flex; flex-wrap: wrap; column-gap: 1.3rem; }\n.shelf-tools a { display: flex; align-items: center; min-height: 44px; padding-bottom: .375rem; font-size: .875rem; color: var(--muted); text-decoration: none; }\n.shelf-tools a[aria-current] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); font-weight: 700; }\n#usage, .count, figcaption { font-variant-numeric: tabular-nums; }\n#usage, .work .source, .chapter-row .count { font-size: .75rem; }\n.work { padding-top: clamp(1.5rem, 3vw, 2rem); }\n.work-head { margin-bottom: .875rem; }\n.work-head > div { min-width: 0; }\n.work-head h2 {\n  font: 700 clamp(1.9375rem, 3vw, 2.375rem)/1.35 \"Songti TC\", \"Noto Serif TC\", \"PMingLiU\", serif;\n  letter-spacing: .025em;\n}\n.source { overflow-wrap: anywhere; }\n.chapter-row {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) auto 44px;\n  align-items: center;\n  column-gap: 1rem;\n  border-top: 1px solid var(--line);\n  padding-block: .75rem;\n}\n.chapter-row:last-child { border-bottom: 1px solid var(--line); }\n.chapter-link { font-weight: 570; overflow-wrap: anywhere; }\n.chapter-row .chapter-link { display: block; min-width: 0; font-size: 1.125rem; line-height: 1.48; font-weight: 650; letter-spacing: .015em; text-decoration: none; }\n.chapter-row .chapter-link:is(:hover, :focus-visible) { color: var(--accent); text-decoration: underline; }\n.chapter-heading { display: flex; align-items: baseline; gap: .625rem; }\n.chapter-heading > span { min-width: 0; }\n.chapter-ordinal { flex: none; max-width: 42%; font-size: .8125rem; font-weight: 500; letter-spacing: normal; color: var(--muted); }\n.chapter-separator { font-size: 0; }\n.chapter-subtitle { display: block; color: var(--muted); font-size: .88rem; font-weight: normal; overflow-wrap: anywhere; }\n.favorite { color: var(--muted); font-size: .75rem; padding: .32rem .56rem; border-color: var(--line); }\n.favorite[aria-pressed=\"true\"] { color: var(--favorite-ink); border-color: var(--favorite-border); background: var(--favorite-fill); }\n.chapter-row .favorite { display: grid; place-items: center; justify-self: end; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; }\n.chapter-row .favorite[aria-pressed=\"true\"] { color: var(--accent); }\n.chapter-row .favorite:hover { background: var(--hover); }\n.chapter-row .favorite:active { background: var(--active); }\n.favorite[aria-disabled=\"true\"] { opacity: .55; cursor: wait; }\n.chapter-row .favorite svg { width: 19px; height: 19px; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; fill: none; }\n.chapter-row .favorite[aria-pressed=\"true\"] svg { fill: currentColor; }\n#export-tools { position: sticky; top: 0; z-index: 1; display: grid; gap: .25rem; padding-block: .75rem; background: var(--paper); border-bottom: 1px solid var(--line); }\n.export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }\n.export-actions > :is(button, a) { display: inline-flex; align-items: center; min-height: 44px; font-size: .875rem; }\n#export-tools button:disabled { cursor: default; }\n#export-status { margin-top: .25rem; font-size: .875rem; overflow-wrap: anywhere; }\n#export-status[data-error] { font-weight: 650; }\n.export-check { display: grid; place-items: center; width: 44px; height: 44px; cursor: pointer; }\n.export-check input { margin: 0; width: 1.125rem; height: 1.125rem; accent-color: var(--accent); scroll-margin-top: 10rem; }\n.chapter-row label.chapter-link { cursor: pointer; }\n.empty { padding: 4.5rem 0; }\n.empty p, .hint { margin-top: .7rem; color: var(--muted); max-width: 39rem; }\n#notice { margin-bottom: 1.25rem; padding: .7rem 1rem; background: var(--notice-surface, #f2e9cf); color: var(--notice-ink, #574722); border-radius: .3rem; overflow-wrap: anywhere; }\n#notice[data-tone=\"success\"] { background: var(--favorite-fill); color: var(--favorite-ink); font-weight: 650; }\n.notice-detail { display: block; margin-top: .25rem; font-weight: 400; }\n.notice-detail:empty { display: none; }\n.notice-detail a { display: inline-block; }\n.storage-retention { margin-top: 1.75rem; overflow-wrap: anywhere; }\n#request-retention { margin-top: .75rem; min-height: 44px; }\n.back { display: inline-block; margin-bottom: 1.25rem; }\n#storage h1 { margin-bottom: 1rem; }\nform { margin: 1.75rem 0 0; }\nlabel { display: block; font-weight: 650; }\n.field { display: flex; gap: .65rem; margin-top: .5rem; }\ninput { min-width: 0; width: 9rem; padding: .4rem .6rem; border: 1px solid var(--field-border); border-radius: .35rem; background: var(--field); color: var(--ink); }\n.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }\n.primary:is(a, :enabled):is(:hover, :active) { color: var(--on-accent); background: var(--accent-hover); }\n#reader { max-width: 48rem; margin-inline: auto; }\n#chapter-head p { margin-top: .35rem; }\n.reading-chapter #chapter-head h1 { font-size: 1.12rem; }\n.reading-chapter #chapter-head p { color: var(--muted); font-size: .85rem; }\n.reading-chapter #reader-return { margin: 0; }\n#reader-end { display: grid; gap: .6rem; }\n#reader-end:empty { display: none; }\n#reader-tools { height: 0; }\n.reading-chapter .masthead { display: none; }\n.reading-chapter main { width: 100%; padding: 0; }\n.reading-chapter #notice {\n  position: fixed;\n  z-index: 1;\n  inset: auto 0 .75rem;\n  margin: auto;\n  width: max-content;\n  max-width: calc(100% - 2rem);\n  max-height: 35dvh;\n  overflow: auto;\n}\n#pages figcaption {\n  position: absolute;\n  width: 1px;\n  height: 1px;\n  overflow: hidden;\n  clip-path: inset(50%);\n  white-space: nowrap;\n}\n#reader[data-mode=\"scroll\"] #pages > * + * { margin-top: .25rem; }\n.page-slot { background: var(--slot); aspect-ratio: 2 / 3; width: 100%; }\n.page-slot img { display: block; width: 100%; height: auto; }\n.gap { padding: 1rem; text-align: center; background: var(--slot); color: var(--muted); }\n.theme-picker, .kg-reader-controls label {\n  display: flex;\n  align-items: center;\n  gap: .5rem;\n  font-size: .85rem;\n  font-weight: 500;\n  color: var(--muted);\n}\n.kg-reader-controls select, .theme-picker select {\n  border: 1px solid var(--field-border);\n  border-radius: .35rem;\n  color: var(--ink);\n  background: var(--field);\n  font: inherit;\n  font-size: .88rem;\n  padding: .3rem .55rem;\n  min-height: 2.1rem;\n}\n.kg-reader-controls select:hover, .theme-picker select:hover { background: var(--hover); }\n.theme-picker { flex: none; gap: .3125rem; font-size: .75rem; }\n.theme-picker select { min-height: 1.875rem; padding: .125rem .25rem; font-size: .75rem; border-color: var(--line); background: transparent; }\n.kg-reader-controls button:disabled { cursor: default; }\n.paged-reader #reader { max-width: none; }\n.paged-reader #pages {\n  display: flex;\n  justify-content: center;\n  width: 100%;\n  height: 100dvh;\n  gap: 2px;\n}\n.paged-reader #pages > * {\n  flex: 1 1 0;\n  min-width: 0;\n  direction: ltr;\n}\n.paged-reader .page-slot {\n  height: 100%;\n  background: transparent;\n}\n.paged-reader .page-slot img {\n  height: 100%;\n  object-fit: contain;\n}\n#pages[dir=\"rtl\"] { --first-spine: left; --second-spine: right; }\n#pages[dir=\"ltr\"] { --first-spine: right; --second-spine: left; }\n#reader[data-mode=\"double\"] figure:first-child:not(:only-child) img { object-position: var(--first-spine) center; }\n#reader[data-mode=\"double\"] figure:nth-child(2) img { object-position: var(--second-spine) center; }\n.paged-reader #pages > .gap { display: grid; place-items: center; }\n:root[data-reader-theme=\"dark\"] #notice { --notice-surface: #423b28; --notice-ink: #f0e2bc; }\n@media (max-width: 38rem) {\n  .topline, main { width: calc(100% - 2.5rem); }\n  main { padding-top: 1.6875rem; }\n  h1 { font-size: 1.95rem; }\n  .chapter-row { grid-template-columns: minmax(0, 1fr) 44px; column-gap: .375rem; padding-block: .8125rem .75rem; }\n  .chapter-row .count { grid-column: 1; margin-top: .125rem; }\n  .chapter-row :is(.favorite, .export-check) { grid-column: 2; grid-row: 1 / 3; }\n}\n@media (max-width: 22rem) {\n  .work-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .375rem .5rem; }\n  .work-head > div { display: contents; }\n  .work-head h2, .work-head > :only-child .source { grid-column: 1 / -1; }\n  .work-head .favorite { grid-column: 2; }\n}\n\n.kg-page-gestures { touch-action: pan-y pinch-zoom; }\n\n.kg-reader-controls input[type=\"checkbox\"] {\n  width: 1rem;\n  height: 1rem;\n  margin: 0;\n  padding: 0;\n  accent-color: var(--accent);\n}\n.kg-page-turns[data-direction=\"rtl\"] { flex-direction: row-reverse; }\n\ndialog.kg-thumb-picker {\n  position: fixed;\n  inset: 0;\n  margin: auto;\n  box-sizing: border-box;\n  width: 94vw;\n  height: 92dvh;\n  max-width: 100%;\n  max-height: 100dvh;\n  padding: 0;\n  overflow: hidden;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--paper);\n  color: var(--ink);\n  font: inherit;\n  text-align: start;\n}\ndialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }\n.kg-thumb-picker::backdrop { background: rgb(9 14 10 / 68%); }\n.kg-thumb-head, .kg-thumb-footer {\n  display: flex;\n  flex: none;\n  align-items: center;\n  gap: .75rem;\n  padding: .75rem 1rem;\n}\n.kg-thumb-head { flex-wrap: wrap; border-bottom: 1px solid var(--line); }\n.kg-thumb-head strong { font-size: 1.1rem; margin: 0; }\n.kg-thumb-range {\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n}\n.kg-thumb-head .kg-thumb-size {\n  display: inline-flex;\n  align-items: center;\n  gap: .4rem;\n  margin-inline-start: auto;\n  color: var(--muted, var(--ink));\n  font-size: .85rem;\n  white-space: nowrap;\n}\n.kg-thumb-size select { min-height: 2.1rem; }\n.kg-thumb-footer { justify-content: space-between; border-top: 1px solid var(--line); }\n.kg-thumb-grid {\n  --tile-min: 6rem;\n  display: grid;\n  flex: 1 1 0;\n  min-height: 0;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--tile-min)), 1fr));\n  grid-auto-rows: max-content;\n  align-content: start;\n  gap: .75rem;\n  padding: 1rem;\n  overflow-y: auto;\n  overscroll-behavior: contain;\n  scroll-padding: 1rem;\n}\n.kg-thumb-grid[data-size=\"small\"] { --tile-min: 4rem; }\n.kg-thumb-grid[data-size=\"large\"] { --tile-min: clamp(15rem, 24vw, 26rem); }\n.kg-thumb-grid .kg-thumb-page {\n  display: flex;\n  flex-direction: column;\n  align-items: stretch;\n  gap: .22rem;\n  min-width: 0;\n  padding: .25rem;\n  border: 1px solid transparent;\n  border-radius: .35rem;\n  background: transparent;\n  color: var(--ink);\n  font: inherit;\n  font-size: .85rem;\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n  white-space: normal;\n  cursor: pointer;\n}\n.kg-thumb-grid .kg-thumb-page:hover { background: var(--hover); }\n.kg-thumb-grid .kg-thumb-page[aria-current=\"page\"] {\n  border-color: var(--accent);\n  color: var(--accent);\n  font-weight: 700;\n}\n.kg-thumb-frame {\n  display: grid;\n  place-items: center;\n  width: 100%;\n  flex: none;\n  aspect-ratio: 3 / 4;\n  overflow: hidden;\n  background: var(--slot, var(--well));\n  color: var(--muted, var(--ink));\n  font-size: .8rem;\n}\n.kg-thumb-frame img {\n  display: block;\n  width: 100%;\n  height: 100%;\n  min-height: 0;\n  object-fit: contain;\n}\n@media (max-width: 38rem) {\n  dialog.kg-thumb-picker { width: calc(100vw - .5rem); height: calc(100dvh - 1rem); }\n  .kg-thumb-head { gap: .4rem .6rem; padding: .6rem; }\n  .kg-thumb-grid { --tile-min: 4.8rem; gap: .5rem; padding: .65rem; }\n  .kg-thumb-grid[data-size=\"small\"] { --tile-min: 3.3rem; }\n  .kg-thumb-grid[data-size=\"large\"] { --tile-min: 12rem; }\n}\n.kg-reader-controls {\n  --edge-width: 2.5rem;\n  --edge-surface: var(--paper);\n  display: contents;\n}\n.kg-reader-controls[hidden] { display: none; }\n.kg-edge, .kg-edge-panel {\n  display: flex;\n  align-items: center;\n}\n.kg-edge {\n  position: fixed;\n  top: 50%;\n  transform: translateY(-50%);\n  z-index: 8;\n  pointer-events: none;\n}\n.kg-edge-left { left: env(safe-area-inset-left, 0px); }\n.kg-edge-right { right: env(safe-area-inset-right, 0px); flex-direction: row-reverse; }\n.kg-reader-controls .kg-edge-toggle {\n  position: relative;\n  padding: .7rem .35rem;\n  width: var(--edge-width);\n  min-height: 3.8rem;\n  display: grid;\n  place-items: center;\n  border: 1px solid var(--line);\n  background: color-mix(in srgb, var(--edge-surface) 91%, transparent);\n  color: var(--ink);\n  font: inherit;\n  font-size: .8rem;\n  font-weight: 600;\n  letter-spacing: .1em;\n  line-height: 1;\n  writing-mode: vertical-rl;\n  text-orientation: upright;\n  pointer-events: auto;\n  cursor: pointer;\n}\n.kg-edge-left .kg-edge-toggle { border-left: 0; border-radius: 0 .45rem .45rem 0; }\n.kg-edge-right .kg-edge-toggle { border-right: 0; border-radius: .45rem 0 0 .45rem; }\n.kg-edge-toggle:lang(en) { text-orientation: mixed; }\n.kg-reader-controls .kg-edge-toggle:is(:hover, [aria-expanded=\"true\"]) {\n  background: var(--hover);\n  color: var(--accent);\n}\n.kg-edge .kg-edge-panel {\n  position: absolute;\n  width: 15rem;\n  max-width: calc(100vw - 2 * var(--edge-width) - 1.25rem);\n  max-height: calc(100dvh - 2rem);\n  flex-direction: column;\n  align-items: stretch;\n  gap: .65rem;\n  margin: 0;\n  padding: 1rem;\n  overflow: auto;\n  overscroll-behavior: contain;\n  border: 1px solid var(--line);\n  border-radius: .6rem;\n  background: var(--edge-surface);\n  color: var(--ink);\n  box-shadow: 0 .3rem 1.2rem rgb(0 0 0 / 18%);\n  font-size: .9rem;\n  line-height: 1.45;\n  pointer-events: auto;\n}\n.kg-edge-panel[hidden] { display: none; }\n.kg-edge-left .kg-edge-panel { left: calc(100% + .35rem); }\n.kg-edge-right .kg-edge-panel { right: calc(100% + .35rem); }\n.kg-edge-panel h2 {\n  margin: 0 0 .2rem;\n  color: var(--ink);\n  font: inherit;\n  font-size: 1.05rem;\n  font-weight: 700;\n}\n.kg-edge-panel > label {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: .6rem;\n  font-size: .875rem;\n}\n.kg-edge-panel > label > select { max-width: 100%; margin-inline-start: auto; }\n.kg-edge-panel > label:has(input) { justify-content: start; }\n.kg-edge-extras {\n  display: grid;\n  gap: .6rem;\n  min-width: 0;\n  padding-top: .75rem;\n  border-top: 1px solid var(--line);\n}\n.kg-edge-extras:not(:has(> :not([hidden]))) { display: none; }\n.kg-page-turns {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: .25rem;\n}\n.kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }\n.kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }\n.kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }\n.kg-edge-right .kg-edge-panel > button { min-height: 44px; }\n</style></head>\n<body>\n  <header class=\"masthead\">\n    <div class=\"topline\">\n      <a class=\"brand\" href=\"#shelf\" aria-label=\"KomaGlide 本站書庫首頁\" data-i18n-label=\"siteLibraryHome\">KomaGlide</a>\n      <div class=\"masthead-tools\">\n        <span id=\"offline-state\" role=\"status\" data-i18n=\"preparingLibrary\"></span>\n        <label class=\"theme-picker\" for=\"library-theme\"><span data-i18n=\"appearance\">外觀</span>\n          <select id=\"library-theme\">\n            <option value=\"system\" data-i18n=\"systemTheme\">跟隨系統</option>\n            <option value=\"light\" data-i18n=\"lightTheme\">淺色</option>\n            <option value=\"dark\" data-i18n=\"darkTheme\">深色</option>\n          </select>\n        </label>\n        <label class=\"theme-picker\" for=\"library-language\">\n          <span data-i18n=\"language\">語言</span>\n          <select id=\"library-language\"></select>\n        </label>\n      </div>\n    </div>\n  </header>\n  <main>\n    <p id=\"notice\" role=\"status\" hidden></p>\n    <section id=\"shelf\">\n      <div class=\"title-row\">\n        <h1 data-i18n=\"siteLibrary\">本站書庫</h1>\n        <a class=\"nav-action\" href=\"#storage\" data-i18n=\"storageSettings\">容量設定</a>\n      </div>\n      <div class=\"shelf-tools\">\n        <nav aria-label=\"書庫篩選\" data-i18n-label=\"libraryFilters\">\n          <a href=\"#shelf\" id=\"all-tab\" data-i18n=\"allWorks\">全部作品</a>\n          <a href=\"#favorites\" id=\"star-tab\" data-i18n=\"favorites\">收藏</a>\n          <a href=\"#export\" id=\"export-tab\" data-i18n=\"exportMode\">匯出模式</a>\n        </nav>\n        <span id=\"usage\"></span>\n      </div>\n      <div id=\"export-tools\" hidden>\n        <div class=\"export-actions\">\n          <button id=\"export-select-all\" type=\"button\" data-i18n=\"exportSelectAll\" disabled>全選</button>\n          <button id=\"export-prepare\" class=\"primary\" type=\"button\" data-i18n=\"exportPrepare\" disabled>準備 ZIP</button>\n          <a id=\"export-download\" class=\"nav-action primary\" data-i18n=\"exportDownload\" hidden>下載 ZIP</a>\n        </div>\n        <p id=\"export-selection\" class=\"count\" role=\"status\"></p>\n        <p class=\"count\" data-i18n=\"exportSavedOnly\">ZIP 包含已儲存的漫畫頁。</p>\n        <p id=\"export-status\" role=\"status\" hidden></p>\n      </div>\n      <div id=\"books\"></div>\n    </section>\n    <section id=\"storage\" hidden>\n      <a class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <h1 data-i18n=\"storageSettings\">容量設定</h1>\n      <p id=\"storage-summary\"></p>\n      <form id=\"limit-form\">\n        <label for=\"limit\" data-i18n=\"storageLimit\">書庫容量上限（MiB）</label>\n        <div class=\"field\"><input type=\"number\" id=\"limit\" required min=\"1\" step=\"1\"><button class=\"primary\" type=\"submit\" data-i18n=\"saveLimit\">儲存上限</button></div>\n      </form>\n      <p class=\"hint\" data-i18n=\"limitHint\">收藏和一般快取共用容量。調低上限時，書庫會優先移除最久沒讀且未收藏的章節。</p>\n      <section class=\"storage-retention\" aria-labelledby=\"retention-title\">\n        <h2 id=\"retention-title\" data-i18n=\"storageProtection\">瀏覽器儲存保護</h2>\n        <p class=\"hint\" id=\"retention\" role=\"status\"></p>\n        <p class=\"hint\" data-i18n=\"storageProtectionHint\">空間不足時，瀏覽器可能清除未受保護的網站資料。</p>\n        <button id=\"request-retention\" type=\"button\" data-i18n=\"requestPersistence\">申請持久儲存</button>\n        <p class=\"hint\" id=\"retention-result\" role=\"status\"></p>\n      </section>\n    </section>\n    <section id=\"reader\" hidden>\n      <a id=\"reader-return\" class=\"back\" href=\"#shelf\" data-i18n=\"backToLibrary\">返回書庫</a>\n      <div id=\"chapter-head\"></div>\n      <div id=\"reader-tools\"></div>\n      <div id=\"pages\"></div>\n      <nav id=\"reader-end\" aria-label=\"話數導覽\" data-i18n-label=\"chapterNavigation\"></nav>\n    </section>\n    <noscript>請啟用 JavaScript 以開啟本機書庫。</noscript>\n  </main>\n</body>\n</html>\n", 'text/html');
     if (document.documentElement?.hasAttribute('data-komaglide-shelf')) return;
     if (!document.doctype) {
       document.insertBefore(document.implementation.createDocumentType('html', '', ''), document.firstChild);
@@ -1573,6 +1711,7 @@ function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, 
       ...getShelfEvents(),
       saveLanguage: value => write(languageKey, value),
       openNovel: openShelfNovel,
+      legacyView: await read(VIEW).catch(() => null),
     });
     document.getElementById('offline-state').textContent = location.host;
   }
@@ -1762,7 +1901,8 @@ siteAdapters.push(function detectEHentai(root, address) {
       if (directory.subtitle === undefined) await loadBatch(0, signal);
       return directory.subtitle;
     },
-    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index, resolvePage, parallelPages:true,
+    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index, pageSelected:Boolean(reader),
+    resolvePage, parallelPages:true,
     pageLabelSelector:'#i2 .sn div', nextPage:null, nextChapter:null};
 });
 
@@ -1870,6 +2010,7 @@ siteAdapters.push(function detectHitomi(root, address) {
   }
 
   return {workId: id, workTitle: title, chapterId: id, chapterTitle: title, chapterUrl, entries, total, startIndex,
+    pageSelected: requested >= 1 && requested <= total && Boolean(reader),
     resolvePage, parallelPages: true, nextPage: null, nextChapter: null};
 });
 
@@ -1980,6 +2121,17 @@ function waitForManhuaguiPage(box, counter, index, signal, currentPage, selectPa
   });
 }
 
+const manhuaguiPageChoices = new WeakMap();
+const manhuaguiObservedSelectors = new WeakSet();
+
+function manhuaguiPageChoice(pager, page, explicit) {
+  const previous = manhuaguiPageChoices.get(pager);
+  if (previous?.generated === page || previous?.page === page && previous.explicit) return previous;
+  const choice = {page, explicit};
+  manhuaguiPageChoices.set(pager, choice);
+  return choice;
+}
+
 function detectMobileManhuagui(root, address, workId, chapterId) {
   const heading = root.querySelector('#mangaTitle');
   const work = heading?.querySelector('a[href]');
@@ -1993,6 +2145,10 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
       !box || !Number.isSafeInteger(total) || total < 1) return null;
 
   const hashPage = () => Number(new URLSearchParams(location.hash.slice(1)).get('p') || 1);
+  const hashIndex = hashPage();
+  const validIndex = Number.isSafeInteger(hashIndex) && hashIndex >= 1 && hashIndex <= total;
+  const choice = manhuaguiPageChoice(box, validIndex ? hashIndex : 1,
+    validIndex && new URLSearchParams(address.hash.slice(1)).has('p'));
   function currentPage() {
     const index = Number(counter.textContent.trim());
     if (index !== hashPage() || !Number.isSafeInteger(index) || index < 1 || index > total) return null;
@@ -2003,6 +2159,8 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
         index < 1 || index > total || location.pathname !== address.pathname) return null;
     return waitForManhuaguiPage(box, counter, index, signal, currentPage, () => {
       if (hashPage() === index) return;
+      const native = manhuaguiPageChoices.get(box);
+      if (native) native.generated = index;
       const oldURL = location.href;
       const url = new URL(oldURL);
       url.hash = 'p=' + index;
@@ -2014,9 +2172,8 @@ function detectMobileManhuagui(root, address, workId, chapterId) {
   }
 
   const entry = currentPage();
-  const start = hashPage();
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl:address.origin + address.pathname,
-    total, entries:entry ? [entry] : [], startIndex:Number.isSafeInteger(start) && start >= 1 && start <= total ? start : 1,
+    total, entries:entry ? [entry] : [], startIndex:choice.page, pageSelected:choice.explicit,
     pageLabelSelector:'#pageNo', resolvePage, nextPage:null, nextChapter:null,
     nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, true)};
 }
@@ -2037,6 +2194,16 @@ siteAdapters.push(function detectManhuagui(root, address) {
   const box = root.querySelector('#mangaBox');
   const total = select?.options.length;
   if (!box || !counter || !total || ![...select.options].every((option, i) => option.value === String(i + 1))) return null;
+  if (!manhuaguiObservedSelectors.has(select)) {
+    select.addEventListener('change', event => {
+      if (event.isTrusted) manhuaguiPageChoices.set(select, {page: Number(select.value), explicit: true});
+    });
+    manhuaguiObservedSelectors.add(select);
+  }
+  const selected = Number(select.value) || 1;
+  const hash = Number(new URLSearchParams(address.hash.slice(1)).get('p'));
+  const hasSelectedHash = Number.isSafeInteger(hash) && hash >= 1 && hash <= total;
+  const choice = manhuaguiPageChoice(select, hasSelectedHash ? hash : selected, hasSelectedHash || selected > 1);
 
   function currentPage() {
     const index = Number(counter.textContent.trim());
@@ -2047,6 +2214,8 @@ siteAdapters.push(function detectManhuagui(root, address) {
   function resolvePage(index, signal) {
     if (signal.aborted || !select.isConnected || !select.options[index - 1] || location.pathname !== address.pathname) return null;
     return waitForManhuaguiPage(box, counter, index, signal, currentPage, () => {
+      const native = manhuaguiPageChoices.get(select);
+      if (native) native.generated = index;
       select.value = String(index);
       select.dispatchEvent(new Event('change', {bubbles: true}));
     });
@@ -2069,7 +2238,8 @@ siteAdapters.push(function detectManhuagui(root, address) {
     if (entry) entries.set(index, entry);
   }
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl: address.origin + address.pathname,
-    total, entries: [...entries.values()], pageLabelSelector, resolvePage, nextPage: null, nextChapter: null,
+    total, entries: [...entries.values()], startIndex: choice.page, pageSelected: choice.explicit,
+    pageLabelSelector, resolvePage, nextPage: null, nextChapter: null,
     nextChapterNavigation:nextManhuaguiChapter(root, address, workId, chapterId, false)};
 });
 
@@ -2100,7 +2270,8 @@ siteAdapters.push(function detectManhuapi(root, address) {
   const total = select?.options.length;
   if (!total) return null;
 
-  const requested = Number(new URLSearchParams(address.hash.slice(1) || address.search).get('p') || 1);
+  const page = new URLSearchParams(address.hash.slice(1) || address.search).get('p');
+  const requested = Number(page || 1);
   const startIndex = Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, total) : 1;
   const nativeImage = root.querySelector('.mh_list > p img');
   const currentUrl = manhuapiImageUrl(nativeImage?.currentSrc || nativeImage?.getAttribute('src'), address);
@@ -2120,6 +2291,7 @@ siteAdapters.push(function detectManhuapi(root, address) {
   const nextUrl = webUrl(next?.getAttribute('href'), address);
   const nextId = nextUrl?.origin === address.origin && manhuapiChapterRoute.exec(nextUrl.pathname)?.[1];
   return {workId, workTitle, chapterId, chapterTitle, chapterUrl: address.origin + address.pathname, entries, total, startIndex,
+    pageSelected: page !== null && Number.isSafeInteger(requested) && requested >= 1 && requested <= total,
     parallelPages: true, nextPage: null, nextChapter: nextId && nextId !== chapterId ? nextUrl.href : null};
 });
 
@@ -2225,7 +2397,7 @@ siteAdapters.push(function detectNhentai(root, address) {
   }
 
   return {workId:id, workTitle:data.title, chapterId:id, chapterTitle:data.title, chapterUrl,
-    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index,
+    entries:data.entry ? [data.entry] : [], total:data.total, startIndex:data.index, pageSelected:Boolean(page),
     resolvePage, parallelPages:true, defaultParallelPreload:3, pageLabelSelector:nhPageLabel,
     nextPage:null, nextChapter:null};
 });
@@ -2268,13 +2440,15 @@ siteAdapters.push(function detectGeneric(root, address) {
     if (/^(utm_|fbclid$|gclid$)/i.test(key)) url.searchParams.delete(key);
   }
   return {chapterId: url.pathname + url.search, chapterUrl: url.href, chapterTitle: title,
-    workId: workTitle, workTitle, total: images.length, entries: images.map((img, i) => ({img, index: i + 1}))};
+    workId: workTitle, workTitle, total: images.length, entries: images.map((img, i) => ({
+      img, index: i + 1, lazyImageUrl: img.dataset.src || img.dataset.lazySrc
+    }))};
 });
 
   function mountNovelReader(document, window, source) {
   'use strict';
   const {chapters, workTitle, loadChapter, initialChapter, close, signal} = source;
-  let partialCatalog = Boolean(source.refreshCatalog);
+  let partialCatalog = Boolean(source.partialCatalog);
   const storageKey = source.storageKey;
   const $ = id => document.getElementById(id);
   const reader = $('reader');
@@ -2525,9 +2699,10 @@ siteAdapters.push(function detectGeneric(root, address) {
     layout(anchor, lastPage);
   }
   function updateChapterNavigation() {
-    for (const link of document.querySelectorAll('.chapter-link')) {
-      if (Number(link.dataset.index) === current) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
+    for (const nav of [desktopToc, mobileToc]) {
+      if (catalogs.get(nav) !== catalogVersion) continue;
+      nav.querySelector('[aria-current="page"]')?.removeAttribute('aria-current');
+      nav.children[current]?.setAttribute('aria-current', 'page');
     }
     const end = $('chapter-end');
     if (current === chapters.length - 1) end.textContent = partialCatalog ? '這是最後一個已存章節' : '全書完';
@@ -2539,29 +2714,41 @@ siteAdapters.push(function detectGeneric(root, address) {
       end.replaceChildren(next);
     }
   }
+  const desktopToc = $('toc');
+  const catalogs = new Map();
+  let catalogVersion = 0;
   let chapterRows, chapterTitles;
-  function drawCatalog() {
-    for (const nav of [$('toc'), mobileToc]) {
-      nav.replaceChildren();
-      chapters.forEach((chapter, index) => {
-        const button = document.createElement('button');
-        button.className = 'chapter-link';
-        button.dataset.index = index;
-        const num = document.createElement('span');
-        num.className = 'chapter-num';
-        num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
-        const name = document.createElement('span');
-        name.className = 'chapter-name';
-        name.textContent = chapter.title;
-        button.append(num, name);
-        button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
-        nav.append(button);
-      });
+  function drawCatalog(nav) {
+    if (catalogs.get(nav) === catalogVersion) return;
+    const rows = document.createDocumentFragment();
+    chapters.forEach((chapter, index) => {
+      const button = document.createElement('button');
+      button.className = 'chapter-link';
+      const num = document.createElement('span');
+      num.className = 'chapter-num';
+      num.textContent = String(chapter.order ?? index + 1).padStart(2, '0');
+      const name = document.createElement('span');
+      name.className = 'chapter-name';
+      name.textContent = chapter.title;
+      button.append(num, name);
+      button.onclick = () => selectChapter(index, false, savedPosition(chapter.id));
+      if (index === current) button.setAttribute('aria-current', 'page');
+      rows.append(button);
+    });
+    nav.replaceChildren(rows);
+    catalogs.set(nav, catalogVersion);
+    if (nav === mobileToc) {
+      chapterRows = [...mobileToc.children];
+      chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
     }
-    chapterRows = [...mobileToc.children];
-    chapterTitles = chapters.map(chapter => chapter.title.normalize('NFKC').toLowerCase());
   }
-  drawCatalog();
+  function drawVisibleCatalogs() {
+    if (sidebar.getClientRects().length) drawCatalog(desktopToc);
+    if (contents.open) {
+      drawCatalog(mobileToc);
+      filterChapters();
+    }
+  }
   function filterChapters() {
     const query = chapterSearch.value.normalize('NFKC').trim().toLowerCase();
     const ordinal = /^\d+$/.test(query) ? Number(query) : null;
@@ -2593,6 +2780,7 @@ siteAdapters.push(function detectGeneric(root, address) {
   });
   $('contents-open').onclick = () => {
     contents.showModal();
+    drawCatalog(mobileToc);
     showCurrentChapter();
   };
   $('contents-close').onclick = () => contents.close();
@@ -2602,6 +2790,7 @@ siteAdapters.push(function detectGeneric(root, address) {
     $('reader-layout').toggleAttribute('data-sidebar-collapsed', collapsed);
     sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
     sidebarToggle.textContent = collapsed ? '展開章節欄' : '收合章節欄';
+    drawVisibleCatalogs();
   }
   sidebarToggle.onclick = () => {
     const anchor = current >= 0 ? position() : null;
@@ -2768,21 +2957,28 @@ siteAdapters.push(function detectGeneric(root, address) {
         if (signal.aborted || version !== generation) return;
         const active = chapters[current];
         const previous = new Map(chapters.map(item => [item.id, item]));
-        const updated = entries.map(entry => Object.assign(previous.get(entry.id) || {}, entry));
-        const ids = new Set(updated.map(item => item.id));
+        const ids = new Set(entries.map(item => item.id));
+        const updated = entries.slice();
         for (const item of chapters) {
           if (!ids.has(item.id) && (cachedIds.has(item.id) || item.paragraphs || loading)) updated.push(item);
         }
-        chapters.splice(0, chapters.length);
-        for (const item of updated) chapters.push(item);
-        current = chapters.indexOf(active);
+        const changed = chapters.length !== updated.length || updated.some((item, index) => {
+          const previous = chapters[index];
+          return item.id !== previous.id || item.title !== previous.title || item.order !== previous.order || item.url !== previous.url;
+        });
+        if (changed) {
+          chapters.length = 0;
+          for (const item of updated) chapters.push(Object.assign(previous.get(item.id) || {}, item));
+          current = chapters.indexOf(active);
+          catalogVersion++;
+        }
         partialCatalog = false;
         chapterCount = '全 ' + chapters.length + ' 章';
         $('chapter-count').textContent = chapterCount;
-        drawCatalog();
-        filterChapters();
+        if (changed) drawVisibleCatalogs();
+        else if (contents.open && !chapterSearch.value.trim()) $('chapter-results').textContent = chapterCount;
         if (current >= 0) {
-          $('number').textContent = '第 ' + chapters[current].order + ' 章';
+          $('number').textContent = '第 ' + (chapters[current].order ?? current + 1) + ' 章';
           updateChapterNavigation();
           if (!loading) updateProgress();
         }
@@ -2803,6 +2999,7 @@ siteAdapters.push(function detectGeneric(root, address) {
     }, {passive:true, signal});
   }
   const resizeObserver = new window.ResizeObserver(() => {
+    if (sidebar.getClientRects().length) drawCatalog(desktopToc);
     if (current < 0) return;
     if (paged()) layout(readingAnchor);
     else updateProgress();
@@ -2865,7 +3062,7 @@ function czbooksCatalog(catalog, bookUrl, workId, chapterId) {
   return ordered;
 }
 
-function czbooksLoader(workId, workTitle, chapterId, root) {
+function czbooksLoader(workId, workTitle, chapterId, root, saveCatalog) {
   return async (chapter, abortSignal) => {
     const key = [CZBOOKS_SITE, workId, chapter.id];
     if (chapter.id !== chapterId) {
@@ -2877,19 +3074,28 @@ function czbooksLoader(workId, workTitle, chapterId, root) {
     const paragraphs = czbooksParagraphs(chapter.id === chapterId ? root : await readCzbooksPage(chapter.url, abortSignal));
     abortSignal.throwIfAborted();
     try {
-      await putNovelChapter({
+      const evicted = await putNovelChapter({
         site: CZBOOKS_SITE, workId, chapterId: chapter.id, workTitle,
         chapterTitle: chapter.title, order: chapter.order
       }, paragraphs);
+      getShelfEvents().announce({kind: 'novel-saved', evicted});
     } catch (error) {
       chapter.cacheFailed = true;
       console.warn('[KomaGlide]', error.message);
       return paragraphs;
     }
-    getShelfEvents().announce({kind: 'novel-saved'});
+    void saveCatalog?.();
     void rememberSite();
     return paragraphs;
   };
+}
+
+async function refreshCzbooksCatalog(bookUrl, workId, signal, update, initialChapter) {
+  if (!navigator.onLine) return;
+  const root = await readCzbooksPage(bookUrl.href, signal);
+  const fresh = czbooksCatalog(root, bookUrl, workId, initialChapter);
+  signal.throwIfAborted();
+  await update(fresh);
 }
 
 function detectCzbooks(root, address) {
@@ -2907,14 +3113,29 @@ function detectCzbooks(root, address) {
   return {
     title,
     async open(signal) {
-      const catalog = chapterId ? await readCzbooksPage(bookUrl.href, signal) : root;
-      const chapters = czbooksCatalog(catalog, bookUrl, workId, chapterId);
-      await saveNovelCatalog(workId, chapters).catch(() => {});
+      let fullCatalog = chapterId ? await readNovelCatalog(workId).catch(() => null) : czbooksCatalog(root, bookUrl, workId);
+      if (chapterId && !fullCatalog?.some(chapter => chapter.id === chapterId)) fullCatalog = null;
+      let savedCatalog = chapterId ? fullCatalog : null;
+      const chapterName = title.textContent.trim().replace(/^《[^》]+》\s*(?:\d+\.\s*)?/, '') || workTitle;
+      const chapters = fullCatalog?.slice() || [{id: chapterId, title: chapterName, url: address.href}];
+      const saveCatalog = async () => {
+        const entries = fullCatalog;
+        if (entries && entries !== savedCatalog && await saveNovelCatalog(workId, entries).catch(() => false)) {
+          savedCatalog = entries;
+        }
+      };
+      void saveCatalog();
       void write(PREFIX + 'novel-shelf-entry', bookUrl.href).catch(() => {});
       return {
         chapters, workTitle, siteName: CZBOOKS_SITE, initialChapter: chapterId,
         storageKey: czbooksNovelStorageKey(workId), cacheFailure: t('novelCacheFailed'),
-        loadChapter: czbooksLoader(workId, workTitle, chapterId, root),
+        loadChapter: czbooksLoader(workId, workTitle, chapterId, root, saveCatalog),
+        partialCatalog: !fullCatalog,
+        refreshCatalog: chapterId ? (signal, update) => refreshCzbooksCatalog(bookUrl, workId, signal, async fresh => {
+          fullCatalog = fresh;
+          update(fresh);
+          await saveCatalog();
+        }, chapterId) : undefined,
       };
     },
   };
@@ -2991,17 +3212,16 @@ function openShelfNovel(chapter, related, close) {
     closeLabel: t('backToLibrary'),
     cacheFailure: t('novelCacheFailed'),
     loadChapter: czbooksLoader(workId, chapter.workTitle),
+    partialCatalog: true,
     async refreshCatalog(signal, update) {
       const saved = await readNovelCatalog(workId).catch(() => null);
       if (signal.aborted) return;
       if (saved?.length) update(saved);
-      if (!navigator.onLine) return;
       const bookUrl = new URL('/n/' + encodeURIComponent(workId), location.origin);
-      const page = await readCzbooksPage(bookUrl.href, signal);
-      const fresh = czbooksCatalog(page, bookUrl, workId);
-      signal.throwIfAborted();
-      update(fresh);
-      await saveNovelCatalog(workId, fresh);
+      await refreshCzbooksCatalog(bookUrl, workId, signal, async fresh => {
+        update(fresh);
+        await saveNovelCatalog(workId, fresh);
+      });
     },
   }, new AbortController(), close);
 }
@@ -3074,14 +3294,23 @@ function runCzbooksNovel() {
   function pageFor(chapter, entry, live = false) {
     const {img, index} = entry;
     const selected = img.currentSrc || img.getAttribute('src');
-    const src = live ? selected : entry.imageUrl || img.dataset.src || img.dataset.lazySrc ||
+    const lazy = webUrl(entry.lazyImageUrl, chapter.baseURL);
+    const selectedUrl = webUrl(selected, chapter.baseURL);
+    let sourceIsSelected = lazy && lazy.href === selectedUrl?.href;
+    if (lazy && !sourceIsSelected && selectedUrl && lazy.href === webUrl(img.getAttribute('src'), chapter.baseURL)?.href) {
+      const sources = [img, ...(img.closest('picture')?.querySelectorAll('source') || [])];
+      sourceIsSelected = sources.some(node => node.getAttribute('srcset')?.split(',').some(candidate =>
+        webUrl(candidate.trim().split(/\s+/)[0], chapter.baseURL)?.href === selectedUrl.href));
+    }
+    if (live && lazy && !sourceIsSelected) return null;
+    const src = live ? selected : entry.imageUrl || (sourceIsSelected ? selected : lazy?.href) || img.dataset.src || img.dataset.lazySrc ||
       selected || img.getAttribute('srcset')?.split(',')[0]?.trim().split(/\s+/)[0];
     const url = webUrl(src, chapter.baseURL);
     // A lazy reader may not have published src yet; the offline copy is keyed
     // by chapter and page number and can still be read without a URL.
     if (live && !url) return null;
     if (live && entry.imageUrl && webUrl(entry.imageUrl, chapter.baseURL)?.href !== url.href) return null;
-    return {...chapterInfo(chapter), index, imageUrl:url?.href || ''};
+    return {...chapterInfo(chapter), index, imageUrl:url?.href || '', confirmedSource: Boolean(lazy)};
   }
   function chapterInfo({chapterId, chapterTitle, chapterSubtitle, chapterUrl, workId, workTitle, total}) {
     return {site: location.origin, chapterId, chapterTitle, chapterSubtitle, chapterUrl, workId, workTitle,
@@ -3183,8 +3412,8 @@ function runCzbooksNovel() {
         const blob = await runSiteRequest(() => fetchImage(page));
         try {
           const chapterSubtitle = chapterSubtitles.get(page.chapterUrl) ?? page.chapterSubtitle;
-          await putPage({...page, chapterSubtitle}, blob);
-          notifyPageSaved(page);
+          const evicted = await putPage({...page, chapterSubtitle}, blob);
+          notifyPageSaved(page, evicted);
           void rememberSite();
           return {blob};
         } catch (storageError) {
@@ -3219,6 +3448,38 @@ function runCzbooksNovel() {
   }
 
   // This module is also bundled into the userscript's isolated reader dialog.
+const readerPreferencesKey = 'komaglide.reader.preferences.v1';
+
+function readReaderPreferences(fallback = {}) {
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(readerPreferencesKey)); } catch { /* Storage may be unavailable. */ }
+  const saved = { ...fallback, ...stored };
+  return {
+    mode: ['single', 'double'].includes(saved.mode) ? saved.mode : 'scroll',
+    theme: ['light', 'dark'].includes(saved.theme) ? saved.theme : 'system',
+    direction: saved.direction === 'ltr' ? 'ltr' : 'rtl',
+    tapToTurn: saved.tapToTurn !== false,
+    thumbnailSize: ['small', 'large'].includes(saved.thumbnailSize) ? saved.thumbnailSize : 'medium',
+  };
+}
+
+function writeReaderPreferences(preferences) {
+  try { localStorage.setItem(readerPreferencesKey, JSON.stringify(preferences)); } catch { /* Keep the choice for this reader. */ }
+}
+
+function comicProgressKey(key) { return 'komaglide.reader.page.' + JSON.stringify(key); }
+
+function readComicPosition(key) {
+  try {
+    const page = Number(localStorage.getItem(comicProgressKey(key)));
+    return Number.isSafeInteger(page) && page > 0 ? page : null;
+  } catch { return null; }
+}
+
+function writeComicPosition(key, page) {
+  try { localStorage.setItem(comicProgressKey(key), String(page)); } catch { /* Keep reading if storage is unavailable. */ }
+}
+
 function watchReaderTheme(paint, signal) {
   const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
   let choice = 'system';
@@ -3644,7 +3905,11 @@ function mountReaderControls(container, options) {
   browse.setAttribute('aria-haspopup', 'dialog');
   settings.panel.append(tapLabel);
   attachExtras(settings.panel, options.settingsExtras);
-  navigation.panel.append(browse);
+  const restart = readerButton(t('readFromStart'), () => {
+    setDrawer(null, true);
+    options.onPick(1);
+  });
+  navigation.panel.append(browse, restart);
   const pager = document.createElement('span');
   pager.className = 'kg-page-turns';
   function turn(step) {
@@ -3727,6 +3992,7 @@ function mountReaderControls(container, options) {
     next.setAttribute('aria-keyshortcuts', rtl ? 'ArrowLeft PageDown' : 'ArrowRight PageDown');
     setTheme?.(state.theme);
     browse.disabled = state.total < 1;
+    restart.disabled = state.total < 1;
     pager.hidden = state.mode === 'scroll';
     pager.dataset.direction = state.direction;
     previous.disabled = first <= 1;
@@ -3816,8 +4082,9 @@ function mountReaderControls(container, options) {
     h2 {font:600 1.35rem/1.35 "DM Sans","PingFang TC",sans-serif;margin:1.2rem 0;overflow-wrap:anywhere}
     figure {padding:0;margin:0 auto 10px;background:var(--well);width:100%}
     figure img {display:block;max-width:100%;height:auto;margin:auto} figure figcaption {padding:8px;color:var(--alert)}
+    .pages figure[data-measured]:empty::before {content:"";display:block;width:min(100%,var(--image-width));aspect-ratio:var(--image-ratio);margin:auto}
     @media (pointer:coarse) {
-      dialog:not(.paged) .pages figure img {width:100%}
+      dialog:not(.paged) .pages figure img,dialog:not(.paged) .pages figure[data-measured]:empty::before {width:100%}
     }
     label {display:inline-flex;align-items:center;gap:4px;white-space:nowrap} input {accent-color:var(--accent)}
     dialog.paged[open] {overflow:hidden}
@@ -4057,6 +4324,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 .kg-page-count { font-variant-numeric: tabular-nums; text-align: center; }
 .kg-edge-panel .kg-page-turns button { padding-inline: .45rem; }
 .kg-edge-panel button, .kg-edge-panel select { min-height: 2.15rem; }
+.kg-edge-right .kg-edge-panel > button { min-height: 44px; }
 
   `;
   function readerRoot(host) {
@@ -4141,6 +4409,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
   }
 
   const VIEW = PREFIX + 'reader-view';
+  const BUFFER_MODE = PREFIX + 'reader-buffer-mode';
   const PARALLEL_PRELOAD = PREFIX + 'parallel-preload';
   const SITE_PARALLEL_PRELOAD = PARALLEL_PRELOAD + '.' + location.origin;
   const PARALLEL_PRELOAD_CHOICES = [1, 2, 3, 4, 5, 6];
@@ -4232,7 +4501,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     const groups = [];
     let liveChapter = first;
     let sourceScroll;
-    let group, position = first.startIndex || 1, controls, scrollFrame = 0, scrollAnchor = null;
+    let group, position = view.position ?? first.startIndex ?? 1, controls, scrollFrame = 0, scrollAnchor = null;
+    let lastReadGroup, lastReadPage, lastReadAt = 0;
     let mode = ['single', 'double'].includes(view.mode) ? view.mode : 'scroll';
     let theme = ['light', 'dark'].includes(view.theme) ? view.theme : 'system';
     let direction = view.direction === 'ltr' ? 'ltr' : 'rtl';
@@ -4258,6 +4528,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     const bufferError = element('div');
     bufferError.hidden = true;
     const entries = new WeakMap();
+    const imageDimensions = new WeakMap();
     const requests = new WeakMap();
     const waitingForSource = new WeakSet();
     const options = {root: overlay || null, rootMargin:'360px 0px'};
@@ -4265,8 +4536,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       for (const change of changes) {
         const figure = change.target;
         if (change.isIntersecting) loadFigure(figure);
-        else if (liveChapter?.resolvePage && mode === 'scroll' && requests.has(figure) && !figure.querySelector('img')) {
-          // After a long jump, leave the native pager free for the new viewport.
+        else if (mode === 'scroll' && requests.has(figure)) {
+          // Release old image resources and leave the native pager free for the viewport.
           releaseFigure(figure);
         }
       }
@@ -4299,7 +4570,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (image) URL.revokeObjectURL(image.url);
       displayedImages.delete(figure);
       figure.replaceChildren();
-      figure.style.minHeight = 'min(60vh, 420px)';
+      figure.style.minHeight = imageDimensions.has(figure) ? '' : 'min(60vh, 420px)';
     }
     function revealNativePage(figure, index) {
       if ((!overlay && !preload) || !liveChapter?.revealPage || groups[0].figures.get(index) !== figure) return false;
@@ -4501,6 +4772,8 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (obsolete()) return;
       let page = entries.get(figure);
       const img = element('img');
+      const dimensions = imageDimensions.get(figure);
+      if (dimensions) [img.width, img.height] = dimensions;
       img.alt = t('pageNumber', {page: page.index});
       img.dataset.index = String(page.index);
       let blob = cached.blob;
@@ -4536,8 +4809,17 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         img.src = URL.createObjectURL(blob);
         displayedImages.set(figure, {url:img.src, blob});
       }
-      img.addEventListener('load', () => { figure.style.minHeight = ''; });
-      img.addEventListener('error', () => figure.append(element('figcaption',t('imageDisplayFailed'))));
+      img.addEventListener('load', () => {
+        if (obsolete() || !img.naturalWidth || !img.naturalHeight) return;
+        imageDimensions.set(figure, [img.naturalWidth, img.naturalHeight]);
+        figure.dataset.measured = '';
+        figure.style.setProperty('--image-width', img.naturalWidth + 'px');
+        figure.style.setProperty('--image-ratio', img.naturalWidth + ' / ' + img.naturalHeight);
+        figure.style.minHeight = '';
+      });
+      img.addEventListener('error', () => {
+        if (!obsolete()) figure.append(element('figcaption',t('imageDisplayFailed')));
+      });
       figure.prepend(img);
     }
 
@@ -4637,6 +4919,18 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         restartBuffer();
       } else scheduleBuffer();
     }
+    function recordPosition() {
+      if (lastReadGroup === group && lastReadPage === position) return;
+      const {site, workId, chapterId} = group.chapter;
+      const key = [site, workId || '', chapterId];
+      writeComicPosition(key, position);
+      if (lastReadGroup !== group || Date.now() - lastReadAt >= 5000) {
+        lastReadAt = Date.now();
+        void markComicChapterRead(key).catch(() => {});
+      }
+      lastReadGroup = group;
+      lastReadPage = position;
+    }
     function updateView() {
       if (!overlay || !group) return;
       syncControls();
@@ -4663,7 +4957,9 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       }
       renderEnd();
     }
-    function saveView() { void write(VIEW, {mode, theme, direction, tapToTurn, thumbnailSize, bufferMode}); }
+    function saveView() {
+      writeReaderPreferences({mode, theme, direction, tapToTurn, thumbnailSize});
+    }
     function scrollToPosition() {
       // At the end of a short chapter the viewport may also show an earlier page.
       // Keep the selected page until the reader scrolls again.
@@ -4675,6 +4971,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       position = index;
       updateView();
       if (mode === 'scroll') scrollToPosition();
+      recordPosition();
     }
     function changeMode(value) {
       if (mode === 'scroll') firstVisible();
@@ -4708,6 +5005,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         group = groups[groups.indexOf(group) + 1];
         position = 1;
         updateView();
+        recordPosition();
         return;
       }
       const next = target();
@@ -4745,6 +5043,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
             group = added;
             position = chapter.entries[0]?.index || 1;
             updateView();
+            recordPosition();
           }
         }
         message.textContent = '';
@@ -4783,6 +5082,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       group = groups[groups.indexOf(group) - 1];
       position = group.total;
       updateView();
+      recordPosition();
     });
     chapterActions.append(message, previousGroup, nextButton);
     if (!overlay && !preload) chapterActions.append(toggleControl(controller.signal));
@@ -4793,6 +5093,14 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     }
     if (overlay) {
       addPages(first, false);
+      // A known current page count takes precedence over an older cache. A
+      // paginated source counts only the pages in its current HTML document.
+      const currentTotal = first.nextPage ? 0 : first.total;
+      const cachedIndices = (view.cached?.indices || []).filter(index => !currentTotal || index <= currentTotal);
+      const cachedTotal = currentTotal ? 0 : view.cached?.chapter.total || 0;
+      group.total = Math.max(group.total, cachedTotal, cachedIndices.at(-1) || 0);
+      for (const index of cachedIndices) ensureFigure(group, index);
+      position = Math.max(1, Math.min(position, group.total || 1));
       const settingsExtras = [
         chapterTitle, chapterSubtitle, bufferError, toggleControl(controller.signal),
         button(t('library'), openShelf), button(t('closeReader'), () => overlay.close())
@@ -4818,7 +5126,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         } : null,
         onBufferMode(value) {
           bufferMode = value;
-          saveView();
+          void write(BUFFER_MODE, value).catch(() => {});
           restartBuffer();
         },
         onTheme(value) {
@@ -4847,6 +5155,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       });
       updateView();
       if (mode === 'scroll' && position > 1) scrollToPosition();
+      recordPosition();
       const clearScrollAnchor = () => { scrollAnchor = null; if (mode === 'scroll') restartBuffer(); };
       const scrollInput = {passive:true, signal:controller.signal};
       for (const type of ['wheel', 'touchmove']) overlay.addEventListener(type, clearScrollAnchor, scrollInput);
@@ -4877,6 +5186,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
           scrollFrame = 0;
           if (mode === 'scroll' && !stopped) {
             firstVisible();
+            recordPosition();
             syncControls();
             checkNativeEnd();
           }
@@ -4886,6 +5196,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     renderEnd();
     if (!preload) boundary.observe(endMarker);
     function dispose() {
+      if (overlay && scrollFrame && mode === 'scroll') {
+        firstVisible();
+        recordPosition();
+      }
       stopped = true;
       checkNativeBuffer?.();
       controller.abort();
@@ -5032,11 +5346,17 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
     }
     async function openReader() {
       if (dialog || !chapter) return;
+      const selected = chapter;
+      const key = [location.origin, selected.workId || '', selected.chapterId];
       const resumePreload = preloadJob && chapter.chapterUrl;
       stopPreload();
       dialog = element('dialog');
       dialog.setAttribute('aria-label',t('verticalReader'));
-      const [view, parallelPreload] = await Promise.all([read(VIEW).catch(() => null), chapter.parallelPages && readParallelPreload()]);
+      const [legacyView, bufferMode, parallelPreload, cached] = await Promise.all([
+        read(VIEW).catch(() => null), read(BUFFER_MODE).catch(() => null),
+        selected.parallelPages && readParallelPreload(), readChapter(key).catch(() => null),
+      ]);
+      const position = selected.pageSelected ? selected.startIndex : readComicPosition(key);
       const restoreViewport = fitReaderViewport();
       root.append(dialog);
       dialog.showModal();
@@ -5052,7 +5372,9 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         open.focus({preventScroll:true});
         if (resumePreload && resumePreload === chapter.chapterUrl) void startPreload();
       }, {once:true});
-      overlayFlow = createFlow(dialog, chapter, dialog, {...view, parallelPreload});
+      overlayFlow = createFlow(dialog, selected, dialog, {
+        ...readReaderPreferences(legacyView), bufferMode: bufferMode ?? legacyView?.bufferMode, parallelPreload, cached, position,
+      });
     }
     registerMenu(t('verticalReader'), openReader);
     return {
@@ -5087,11 +5409,12 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
 
   function runSource() {
     let continuation = takeReaderContinuation();
-    const saved = new Set();
+    const saved = new Map();
     const failures = new Map();
     const queue = [];
-    const pending = new Set();
+    const pending = new Map();
     let active = false;
+    let rescanAfterCapture = false;
     let scanScheduled = false;
     let hasNativePager = false;
     let pageLabelSelector;
@@ -5141,7 +5464,7 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         if (isCurrentChapter(page)) show(t('savingPage', {page: page.index}));
         try {
           await saveLoaded(page);
-          saved.add(key);
+          saved.set(key, page);
           failures.delete(key);
         } catch (err) {
           const attempts = (failures.get(key)?.attempts || 0) + 1;
@@ -5152,6 +5475,10 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       }
       active = false;
       refreshStatus();
+      if (rescanAfterCapture) {
+        rescanAfterCapture = false;
+        schedule();
+      }
     }
 
     let pendingSubtitle;
@@ -5193,8 +5520,18 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (!controls) {
         controls = sourceReader();
         getShelfEvents().changes.addEventListener('change', ({detail}) => {
-          // A write to another chapter can also evict the displayed chapter.
-          if (detail.kind === 'saved' || detail.kind === 'limit') refreshStatus();
+          for (const [site, workId, chapterId] of detail.evicted || []) {
+            for (const [id, page] of saved) {
+              if (page.site === site && (page.workId || '') === workId && page.chapterId === chapterId) saved.delete(id);
+            }
+          }
+          if (detail.kind === 'saved' && detail.index) {
+            failures.delete(JSON.stringify([detail.site, detail.workId || '', detail.chapterId, detail.index]));
+          } else if (detail.kind === 'limit' && failures.size) {
+            failures.clear();
+            if (!detail.evicted?.length) schedule();
+          }
+          if (detail.kind === 'saved' || detail.kind === 'limit' || detail.evicted?.length) refreshStatus();
         });
       }
       if (!chapterKey || !isCurrentChapter(chapter) || chapterTotal !== chapter.total) {
@@ -5214,10 +5551,18 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
         const page = pageFor(chapter, entry, true);
         if (!page) continue;
         const key = JSON.stringify([page.site, page.workId, page.chapterId, index]);
+        const previous = saved.get(key);
+        if (previous && (!page.confirmedSource || previous.confirmedSource || previous.imageUrl === page.imageUrl)) continue;
+        if (pending.has(key)) {
+          if (pending.get(key) !== page.imageUrl) rescanAfterCapture = true;
+          continue;
+        }
         const failure = failures.get(key);
-        if (saved.has(key) || pending.has(key) || (failure && (failure.attempts >= 3 || Date.now() < failure.retryAt))) continue;
+        if (failure?.page.imageUrl === page.imageUrl &&
+            (failure.attempts >= 3 || Date.now() < failure.retryAt)) continue;
+        if (failure && failure.page.imageUrl !== page.imageUrl) failures.delete(key);
         queue.push({page, key});
-        pending.add(key);
+        pending.set(key, page.imageUrl);
       }
       void drain();
     }
@@ -5242,7 +5587,9 @@ dialog.kg-thumb-picker[open] { display: flex; flex-direction: column; }
       if (changes.some(({target, addedNodes}) => target instanceof HTMLImageElement ||
         (pageLabelSelector && target.closest?.(pageLabelSelector)) ||
         [...addedNodes].some(node => node.nodeType === 1 && (node.matches(selector) || node.querySelector(selector))))) schedule();
-    }).observe(document.documentElement, {subtree:true, childList:true, attributes:true, attributeFilter:['src','srcset']});
+    }).observe(document.documentElement, {
+      subtree:true, childList:true, attributes:true, attributeFilter:['src','srcset','data-src','data-lazy-src'],
+    });
     window.addEventListener('popstate', schedule);
     window.addEventListener('hashchange', schedule);
     prepareHitomi(document, new URL(location.href), schedule);

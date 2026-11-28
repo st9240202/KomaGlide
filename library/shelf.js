@@ -1,9 +1,9 @@
 import { locale, localeNames, localizeDocument, t } from './i18n.js';
-import { shelf, readChapter, readExportChapters, readerBlob, setFavorite, setLimit } from './store.js';
-import { makeReaderThumbnail, mountReaderControls, watchReaderTheme } from './reader-controls.js';
+import { shelf, readChapter, readExportChapters, readExportMetadata, readerBlob, setFavorite, setLimit, markComicChapterRead } from './store.js';
+import { makeReaderThumbnail, mountReaderControls, watchReaderTheme, readerPreferencesKey, readReaderPreferences, writeReaderPreferences, readComicPosition, writeComicPosition } from './reader-controls.js';
 import { makeComicZip, validateComicZip } from './comic-zip.js';
 
-export function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, openNovel }) {
+export function mountShelf(routePrefix, { announce, changes, messageFor, saveLanguage, openNovel, legacyView }) {
   localizeDocument();
   const $ = id => document.getElementById(id);
   const languagePicker = $('library-language');
@@ -40,23 +40,10 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   const selectedChapters = new Set();
   let exportRows = [];
   let exportJob;
+  let zipChapters;
   let zipClickedAt = 0;
   const MiB = 1024 ** 2;
-  const preferencesKey = 'komaglide.reader.preferences.v1';
-
-  function readPreferences() {
-    let saved;
-    try { saved = JSON.parse(localStorage.getItem(preferencesKey)); } catch { /* Storage may be unavailable. */ }
-    return {
-      mode: ['single', 'double'].includes(saved?.mode) ? saved.mode : 'scroll',
-      theme: ['light', 'dark'].includes(saved?.theme) ? saved.theme : 'system',
-      direction: saved?.direction === 'ltr' ? 'ltr' : 'rtl',
-      tapToTurn: saved?.tapToTurn !== false,
-      thumbnailSize: ['small', 'large'].includes(saved?.thumbnailSize) ? saved.thumbnailSize : 'medium',
-    };
-  }
-
-  let libraryPreferences = readPreferences();
+  let libraryPreferences = readReaderPreferences(legacyView);
   let updateReaderPreferences;
   const themePicker = $('library-theme');
   const themeColor = document.querySelector('meta[name="theme-color"]');
@@ -77,13 +64,13 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   function changePreference(field, value) {
     const next = { ...libraryPreferences, [field]: value };
     applyLibraryPreferences(next);
-    try { localStorage.setItem(preferencesKey, JSON.stringify(next)); } catch { /* Keep the choice for this tab. */ }
+    writeReaderPreferences(next);
   }
 
   applyLibraryPreferences(libraryPreferences);
   themePicker.addEventListener('change', () => changePreference('theme', themePicker.value));
   window.addEventListener('storage', event => {
-    if (event.key === preferencesKey || event.key === null) applyLibraryPreferences(readPreferences());
+    if (event.key === readerPreferencesKey || event.key === null) applyLibraryPreferences(readReaderPreferences(legacyView));
   });
 
   function el(tag, text, className) {
@@ -262,6 +249,7 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
   function clearPreparedZip() {
     exportJob?.abort();
     exportJob = undefined;
+    zipChapters = undefined;
     const download = $('export-download');
     const url = download.getAttribute('href');
     if (url) {
@@ -313,21 +301,37 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     updateExportControls();
   };
   $('export-download').onclick = () => { zipClickedAt = Date.now(); };
+  const exportRevision = chapter => JSON.stringify([chapter.key, chapter.imageRevision, chapter.count]);
+  function clearStaleZip(chapters) {
+    if (chapters.some((chapter, i) => !chapter || exportRevision(chapter) !== zipChapters[i])) {
+      clearPreparedZip();
+      updateExportControls();
+      exportStatus(t(chapters.every(Boolean) ? 'exportChapterChanged' : 'exportChapterMissing'), true);
+      void render();
+      return true;
+    }
+    return false;
+  }
   $('export-prepare').onclick = async () => {
     if (exportJob || !selectedChapters.size) return;
     const prepare = $('export-prepare');
-    const keys = exportRows.filter(({ checkbox }) => selectedChapters.has(checkbox.id)).map(({ chapter }) => chapter.key);
+    const selected = exportRows.filter(({ checkbox }) => selectedChapters.has(checkbox.id)).map(({chapter}) => chapter);
+    const keys = selected.map(chapter => chapter.key);
     clearPreparedZip();
+    zipChapters = selected.map(exportRevision);
     const job = exportJob = new AbortController();
     const { signal } = job;
     updateExportControls();
     exportStatus(t('exportReading'));
     try {
       const chapters = await readExportChapters(keys, validateComicZip, signal);
+      if (signal.aborted || clearStaleZip(chapters.map(({chapter}) => chapter))) return;
       const blob = await makeComicZip(chapters, { signal, progress: (done, total) => {
         if (!signal.aborted) exportStatus(t('exportPackaging', {done, total}));
       }});
       if (signal.aborted) return;
+      const current = await readExportMetadata(keys);
+      if (signal.aborted || clearStaleZip(current)) return;
       const download = $('export-download');
       const host = location.hostname.replace(/[^a-z0-9.-]/gi, '_');
       download.href = URL.createObjectURL(blob);
@@ -408,6 +412,13 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       if (selectedChapters.size !== previousCount) {
         clearPreparedZip();
         exportStatus(t('exportChapterMissing'), true);
+      } else if (zipChapters) {
+        const revisions = new Set(exportRows.filter(({checkbox}) => selectedChapters.has(checkbox.id))
+          .map(({chapter}) => exportRevision(chapter)));
+        if (zipChapters.some(revision => !revisions.has(revision))) {
+          clearPreparedZip();
+          exportStatus(t('exportChapterChanged'), true);
+        }
       }
       updateExportControls();
     }
@@ -425,6 +436,9 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     let current = Math.max(1, Math.min(initialPage, total));
     let preferences = libraryPreferences;
     let scrollAnchor;
+    let scrollFrame;
+    let lastReadAt = Date.now();
+    const lifetime = new AbortController();
     const pending = new Map();
     const urls = new Map();
     function release(slot) {
@@ -502,6 +516,23 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       const row = [...list.children].find(node => node.getBoundingClientRect().bottom > 1);
       return row ? Number(row.dataset.first) : total;
     };
+    function recordPosition(page) {
+      writeComicPosition(key, page);
+      if (Date.now() - lastReadAt >= 5000) {
+        lastReadAt = Date.now();
+        void markComicChapterRead(key).catch(() => {});
+      }
+    }
+    function recordScroll() {
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
+      scrollFrame = undefined;
+      if (preferences.mode !== 'scroll') return;
+      const page = pageAtViewport();
+      if (page === current) return;
+      current = page;
+      recordPosition(page);
+      controls.update({ current });
+    }
     function draw(align = false) {
       clear();
       scrollAnchor = undefined;
@@ -535,6 +566,14 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       if (modeChanged) draw(true);
       else controls.update({ ...preferences, current, total });
     }
+    function pick(page) {
+      current = page;
+      recordPosition(page);
+      if (preferences.mode === 'scroll') {
+        alignToPage();
+        controls.update({ current });
+      } else draw();
+    }
     const controls = mountReaderControls(toolbar, {
       ...preferences, keyTarget: document, tapTarget: list,
       settingsExtras: [$('chapter-head'), $('reader-return')],
@@ -546,21 +585,20 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
       onThumbnailSize: size => changePreference('thumbnailSize', size),
       getCurrentPage: () => pageAtViewport(),
       getThumbnail: async (index, size) => saved.has(index) ? makeReaderThumbnail(await readerBlob(key, index), size) : null,
-      onPick: page => {
-        current = page;
-        if (preferences.mode === 'scroll') {
-          alignToPage();
-          controls.update({ current });
-        } else draw();
-      },
-      onTurn: page => { current = page; draw(); },
+      onPick: pick, onTurn: pick,
     });
     updateReaderPreferences = applyPreferences;
     list.dir = preferences.mode === 'double' ? preferences.direction : 'ltr';
     document.documentElement.classList.add('reading-chapter');
     draw(initialPage > 1);
+    window.addEventListener('scroll', () => {
+      scrollFrame ||= requestAnimationFrame(recordScroll);
+    }, {passive: true, signal: lifetime.signal});
+    window.addEventListener('pagehide', () => { if (scrollFrame) recordScroll(); }, {signal: lifetime.signal});
     disposePages = () => {
       disposePages = () => {};
+      if (scrollFrame) recordScroll();
+      lifetime.abort();
       updateReaderPreferences = undefined;
       controls.destroy();
       clear();
@@ -631,7 +669,8 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
           return;
         }
         if (!indices) throw new Error(t('chapterNotFound'));
-        const current = reset ? 1 : pageAtViewport();
+        const current = reset ? readComicPosition(key) || 1 : pageAtViewport();
+        if (reset) void markComicChapterRead(key).catch(() => {});
         disposePages();
         activeKey = key;
         const source = (chapter.workKnown ? chapter.workTitle + ' · ' : '') + key[0];
@@ -685,8 +724,8 @@ export function mountShelf(routePrefix, { announce, changes, messageFor, saveLan
     const button = event.submitter;
     if (button) button.disabled = true;
     try {
-      await setLimit(Number($('limit').value) * MiB);
-      announce({ kind: 'limit' });
+      const evicted = await setLimit(Number($('limit').value) * MiB);
+      announce({ kind: 'limit', evicted });
       notify(t('storageLimitSaved'));
     } catch (error) {
       notify(messageFor(error));

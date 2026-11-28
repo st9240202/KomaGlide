@@ -93,7 +93,7 @@ async function expectComicExport(context, shelf, emptyShelf, pngs, engine) {
 
   const addChapters = async ({ png, missingPage }) => {
     const db = await new Promise((resolve, reject) => {
-      const open = indexedDB.open("komaglide-library-v1", 1);
+      const open = indexedDB.open("komaglide-library-v1");
       open.onsuccess = () => resolve(open.result);
       open.onerror = () => reject(open.error);
     });

@@ -51,7 +51,7 @@
 
 - `root` 是當前網頁或尚未掛入頁面的下一頁內容，`address` 是該頁網址。模組從傳入的 `root` 讀取內容，兩種閱讀模式就能共用。
 - 網頁不符合時回傳 `null`。成功時提供穩定的 `chapterId`、`chapterTitle`、`chapterUrl`、`workId`、`workTitle`、`entries`。每個 entry 包含正文圖片元素 `img` 和從 1 開始的頁碼 `index`。作品未確認時將作品欄位留空。
-- 可附上已知總頁數 `total`，以及開啟閱讀器時的起始頁碼 `startIndex`。用 `nextPage` 指向本話下一頁，`nextChapter` 指向下一話。缺省時採用通用連結辨識，指定 `null` 代表到此結束。接頁限於同一來源。
+- 可附上已知總頁數 `total`，以及沒有續讀記錄時的起始頁碼 `startIndex`。如果原站網址或操作明確指定頁碼，可同時設定 `pageSelected: true`，優先採用該頁。用 `nextPage` 指向本話下一頁，`nextChapter` 指向下一話。缺省時採用通用連結辨識，指定 `null` 代表到此結束。接頁限於同一來源。
 - 原站隨捲動載圖時，模組可提供 `revealPage(index)`，將原站對應的頁面捲入視窗，並回傳是否找到該頁。彈出閱讀器會先查書庫，只在該頁缺圖且原站尚未提供圖片網址時呼叫它。
 - 原站一次顯示一張圖時，可提供非同步的 `resolvePage(index, signal)`。閱讀器會先查書庫，缺頁才操作原站選頁器。模組等到頁碼和已載入的圖片一致後，回傳該頁的 entry。[漫畫櫃模組](src/sites/manhuagui.js)
 - 能獨立載入各頁的模組可設定 `parallelPages: true`，並用 `defaultParallelPreload` 指定預設並行數（1–6，省略時為 3）。使用者可在閱讀設定覆寫本站的並行數，或選「使用網站預設」恢復。

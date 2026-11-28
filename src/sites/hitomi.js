@@ -102,5 +102,6 @@ siteAdapters.push(function detectHitomi(root, address) {
   }
 
   return {workId: id, workTitle: title, chapterId: id, chapterTitle: title, chapterUrl, entries, total, startIndex,
+    pageSelected: requested >= 1 && requested <= total && Boolean(reader),
     resolvePage, parallelPages: true, nextPage: null, nextChapter: null};
 });

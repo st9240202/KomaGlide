@@ -109,7 +109,7 @@ async function testNhentai(browser, bundle) {
   assert.equal(await preload.inputValue(), 'default');
   assert.equal(await preload.locator('option:checked').textContent(), '使用網站預設（3 頁）');
   await settings.click();
-  await readPage(1);
+  await readPage(2);
   await dialog.locator('.buffer-progress').filter({hasText:/^已保存 3／3 頁$/}).waitFor({timeout:10000});
   const saved = await readSavedChapter(page, '777', '777');
   assert.equal(saved.chapter.total, 3);
